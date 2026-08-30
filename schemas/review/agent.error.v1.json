@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Error",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "code", "category", "message", "retryable"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "agent.error/v1" },
+    "code": { "type": "string" },
+    "category": { "type": "string" },
+    "message": { "type": "string" },
+    "retryable": { "type": "boolean" }
+  }
+}

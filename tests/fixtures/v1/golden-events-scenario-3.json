@@ -1,0 +1,26 @@
+[
+  {
+    "event_type": "kernel.model_started",
+    "sequence": 0,
+    "session_id": "ses-001",
+    "turn": 1,
+    "action_id": "",
+    "execution_id": "exec-001"
+  },
+  {
+    "event_type": "kernel.model_completed",
+    "sequence": 1,
+    "session_id": "ses-001",
+    "turn": 1,
+    "action_id": "",
+    "execution_id": ""
+  },
+  {
+    "event_type": "kernel.action_rejected",
+    "sequence": 2,
+    "session_id": "ses-001",
+    "turn": 1,
+    "action_id": "act-1",
+    "execution_id": ""
+  }
+]

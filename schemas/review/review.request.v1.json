@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "repository_path": {
+      "type": "string"
+    },
+    "schema": {
+      "type": "string",
+      "const": "review.request/v1"
+    }
+  },
+  "required": [
+    "schema", "repository_path"
+  ],
+  "title": "Review Request",
+  "type": "object"
+}

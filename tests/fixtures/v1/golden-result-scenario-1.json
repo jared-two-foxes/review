@@ -1,0 +1,7 @@
+{
+  "schema": "review.result/v1",
+  "status": "APPROVED",
+  "reason": "REVIEW_COMPLETED",
+  "review_id": "rev-001",
+  "completed_at": "2025-01-01T00:00:00Z"
+}

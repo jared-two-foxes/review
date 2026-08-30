@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft/2020-12/schema",
+  "title": "Review Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "reason", "review_id", "completed_at"],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "review.result/v1"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["APPROVED", "CHANGES_REQUESTED", "INDETERMINATE"]
+    },
+    "reason": {
+      "type": "string",
+      "enum": ["REVIEW_ENGINE_NOT_AVAILABLE"]
+    },
+    "review_id": {
+      "type": "string"
+    },
+    "completed_at": {
+      "type": "string"
+    }
+  }
+}

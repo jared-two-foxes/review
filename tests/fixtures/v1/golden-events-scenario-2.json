@@ -1,0 +1,74 @@
+[
+  {
+    "event_type": "kernel.model_started",
+    "sequence": 0,
+    "session_id": "ses-001",
+    "turn": 1,
+    "action_id": "",
+    "execution_id": "exec-001"
+  },
+  {
+    "event_type": "kernel.model_completed",
+    "sequence": 1,
+    "session_id": "ses-001",
+    "turn": 1,
+    "action_id": "",
+    "execution_id": "exec-002"
+  },
+  {
+    "event_type": "kernel.completion_rejected",
+    "sequence": 2,
+    "session_id": "ses-001",
+    "turn": 1,
+    "action_id": "act-1",
+    "execution_id": "exec-003"
+  },
+  {
+    "event_type": "kernel.model_started",
+    "sequence": 3,
+    "session_id": "ses-001",
+    "turn": 2,
+    "action_id": "",
+    "execution_id": ""
+  },
+  {
+    "event_type": "kernel.model_completed",
+    "sequence": 4,
+    "session_id": "ses-001",
+    "turn": 2,
+    "action_id": "",
+    "execution_id": ""
+  },
+  {
+    "event_type": "kernel.tool_completed",
+    "sequence": 5,
+    "session_id": "ses-001",
+    "turn": 2,
+    "action_id": "act-2",
+    "execution_id": ""
+  },
+  {
+    "event_type": "kernel.model_started",
+    "sequence": 6,
+    "session_id": "ses-001",
+    "turn": 3,
+    "action_id": "",
+    "execution_id": ""
+  },
+  {
+    "event_type": "kernel.model_completed",
+    "sequence": 7,
+    "session_id": "ses-001",
+    "turn": 3,
+    "action_id": "",
+    "execution_id": ""
+  },
+  {
+    "event_type": "kernel.completion_accepted",
+    "sequence": 8,
+    "session_id": "ses-001",
+    "turn": 3,
+    "action_id": "act-3",
+    "execution_id": ""
+  }
+]
