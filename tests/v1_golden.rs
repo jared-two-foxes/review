@@ -13,12 +13,24 @@ use serde_json::json;
 
 fn assert_golden(events: &[LedgerEvent], result: &ReviewResult, scenario: u32) {
     let actual_events = serde_json::to_vec_pretty(events).unwrap();
-    let golden_events = fs::read(format!("tests/fixtures/v1/golden-events-scenario-{scenario}.json")).unwrap();
-    assert_eq!(actual_events, golden_events, "events mismatch for scenario {scenario}");
+    let golden_events = fs::read(format!(
+        "tests/fixtures/v1/golden-events-scenario-{scenario}.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        actual_events, golden_events,
+        "events mismatch for scenario {scenario}"
+    );
 
     let actual_result = serde_json::to_vec_pretty(result).unwrap();
-    let golden_result = fs::read(format!("tests/fixtures/v1/golden-result-scenario-{scenario}.json")).unwrap();
-    assert_eq!(actual_result, golden_result, "result mismatch for scenario {scenario}");
+    let golden_result = fs::read(format!(
+        "tests/fixtures/v1/golden-result-scenario-{scenario}.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        actual_result, golden_result,
+        "result mismatch for scenario {scenario}"
+    );
 }
 
 struct ScriptedModelProvider {

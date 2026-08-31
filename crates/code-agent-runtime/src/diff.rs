@@ -85,7 +85,11 @@ pub fn read_diff(
 
     let truncated = content.len() > byte_limit;
     if truncated {
-        content.truncate(byte_limit);
+        let mut limit = byte_limit;
+        while limit > 0 && !content.is_char_boundary(limit) {
+            limit -= 1;
+        }
+        content.truncate(limit);
         content.push_str(&format!("\n[truncated at {} bytes]", byte_limit));
     }
 

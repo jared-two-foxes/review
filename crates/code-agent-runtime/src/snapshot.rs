@@ -1,7 +1,6 @@
 use crate::error::RepoError;
 use crate::repo::GitRepo;
 use git2::Oid;
-use sha2::{Digest, Sha256};
 
 /// Resolve base and head refs to commit identifiers.
 pub fn resolve_commits(

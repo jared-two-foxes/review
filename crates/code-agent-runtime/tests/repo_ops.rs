@@ -102,7 +102,7 @@ fn snapshot_id_encodes_the_resolved_commit_pair() {
 
     assert_eq!(
         first,
-        "sha256:0123456789abcdef0123456789abcdef01234567:fedcba9876543210fedcba98"
+        "sha256:0123456789abcdef0123456789abcdef01234567:fedcba9876543210fedcba9876543210fedcba98"
     );
     assert_eq!(second, first);
 }
@@ -180,7 +180,13 @@ fn make_test_repo_with_all_change_kinds() -> TempDir {
         .unwrap();
     Command::new("git")
         .args([
-            "-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "-m", "base",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@test.com",
+            "commit",
+            "-m",
+            "base",
         ])
         .current_dir(dir.path())
         .output()
@@ -206,7 +212,13 @@ fn make_test_repo_with_all_change_kinds() -> TempDir {
         .unwrap();
     Command::new("git")
         .args([
-            "-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "-m", "head",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@test.com",
+            "commit",
+            "-m",
+            "head",
         ])
         .current_dir(dir.path())
         .output()
@@ -222,18 +234,26 @@ fn changed_files_reports_added_modified_deleted_and_renamed_paths() {
     let changes = changed_files(&repo, base, head).unwrap();
 
     assert_eq!(changes.len(), 4);
-    assert!(changes.iter().any(|change| {
-        change.path == "added.txt" && change.status == FileStatus::Added
-    }));
-    assert!(changes.iter().any(|change| {
-        change.path == "src/main.rs" && change.status == FileStatus::Modified
-    }));
-    assert!(changes.iter().any(|change| {
-        change.path == "delete_me.txt" && change.status == FileStatus::Deleted
-    }));
-    assert!(changes.iter().any(|change| {
-        change.path == "renamed.txt" && change.status == FileStatus::Renamed
-    }));
+    assert!(
+        changes
+            .iter()
+            .any(|change| { change.path == "added.txt" && change.status == FileStatus::Added })
+    );
+    assert!(
+        changes.iter().any(|change| {
+            change.path == "src/main.rs" && change.status == FileStatus::Modified
+        })
+    );
+    assert!(
+        changes.iter().any(|change| {
+            change.path == "delete_me.txt" && change.status == FileStatus::Deleted
+        })
+    );
+    assert!(
+        changes
+            .iter()
+            .any(|change| { change.path == "renamed.txt" && change.status == FileStatus::Renamed })
+    );
 }
 
 #[test]
@@ -251,7 +271,13 @@ fn read_diff_formats_hunks_and_marks_byte_limited_output() {
         .unwrap();
     Command::new("git")
         .args([
-            "-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "-m", "diff",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@test.com",
+            "commit",
+            "-m",
+            "diff",
         ])
         .current_dir(dir.path())
         .output()

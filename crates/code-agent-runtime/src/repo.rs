@@ -31,7 +31,7 @@ impl GitRepo {
         &self.root
     }
 
-    pub fn revparse_single(&self, refname: &str) -> Result<git2::Object, RepoError> {
+    pub fn revparse_single(&self, refname: &str) -> Result<git2::Object<'_>, RepoError> {
         Ok(self.repo.revparse_single(refname)?)
     }
 
@@ -53,21 +53,22 @@ impl GitRepo {
             });
         }
 
-        // Also check via canonicalize (handles symlinks) if the path exists
-        if let Ok(canonical) = normalized.canonicalize() {
-            if !canonical.starts_with(&self.canonical_root) {
-                return Err(RepoError::PathEscape {
-                    requested: PathBuf::from(relative),
-                    root: self.root.clone(),
-                });
-            }
-            Ok(canonical)
-        } else {
-            Ok(normalized)
+        let canonical = normalized
+            .canonicalize()
+            .map_err(|_| RepoError::PathEscape {
+                requested: PathBuf::from(relative),
+                root: self.root.clone(),
+            })?;
+        if !canonical.starts_with(&self.canonical_root) {
+            return Err(RepoError::PathEscape {
+                requested: PathBuf::from(relative),
+                root: self.root.clone(),
+            });
         }
+        Ok(canonical)
     }
 
-    pub fn find_commit(&self, oid: Oid) -> Result<git2::Commit, RepoError> {
+    pub fn find_commit(&self, oid: Oid) -> Result<git2::Commit<'_>, RepoError> {
         Ok(self.repo.find_commit(oid)?)
     }
 
