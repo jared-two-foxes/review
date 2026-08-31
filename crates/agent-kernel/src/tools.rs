@@ -30,6 +30,12 @@ pub struct ToolCatalog {
     tools: HashMap<String, Box<dyn Tool>>,
 }
 
+impl Default for ToolCatalog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ToolCatalog {
     pub fn new() -> Self {
         Self {
@@ -42,8 +48,8 @@ impl ToolCatalog {
         self.tools.insert(name, tool);
     }
 
-    pub fn get(&self, name: &str) -> Option<&Box<dyn Tool>> {
-        self.tools.get(name)
+    pub fn get(&self, name: &str) -> Option<&dyn Tool> {
+        self.tools.get(name).map(|b| b.as_ref())
     }
 
     pub fn descriptions(&self) -> Vec<ToolDescription> {

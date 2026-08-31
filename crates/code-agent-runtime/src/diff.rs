@@ -1,8 +1,9 @@
 use crate::error::RepoError;
 use crate::repo::GitRepo;
 use git2::Oid;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum FileStatus {
     Added,
     Modified,
@@ -78,6 +79,10 @@ pub fn read_diff(
 
     let mut content = String::new();
     diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+        let origin = line.origin();
+        if origin == '+' || origin == '-' || origin == ' ' {
+            content.push(origin);
+        }
         let text = String::from_utf8_lossy(line.content());
         content.push_str(&text);
         true

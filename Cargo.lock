@@ -264,9 +264,12 @@ dependencies = [
 name = "code-agent-runtime"
 version = "0.1.0"
 dependencies = [
+ "agent-kernel",
  "git2",
  "glob",
  "hex",
+ "serde",
+ "serde_json",
  "sha2",
  "tempfile",
 ]

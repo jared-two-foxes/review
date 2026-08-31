@@ -253,6 +253,18 @@ impl SecurityPolicy {
             .collect();
         Ok(bound_matches_with_limit(&lines, self.matches_limit))
     }
+
+    pub fn entries_limit(&self) -> usize {
+        self.entries_limit
+    }
+
+    pub fn is_path_denied(&self, rel_path: &str) -> bool {
+        is_denied(rel_path)
+    }
+
+    pub fn matches_limit(&self) -> usize {
+        self.matches_limit
+    }
 }
 
 fn collect_matches(
@@ -336,9 +348,18 @@ fn is_denied(requested: &str) -> bool {
     components.iter().enumerate().any(|(index, _)| {
         let suffix = components[index..].join("/");
         DENY_PATTERNS.iter().any(|pattern| {
-            Pattern::new(pattern)
-                .expect("deny patterns must be valid globs")
-                .matches_with(&suffix, options)
+            let p = Pattern::new(pattern).expect("deny patterns must be valid globs");
+            if p.matches_with(&suffix, options) {
+                return true;
+            }
+            // Also deny the directory itself (e.g. `.git` for pattern `.git/**`)
+            if let Some(prefix) = pattern.strip_suffix("/**")
+                && let Ok(p2) = Pattern::new(prefix)
+                && p2.matches_with(&suffix, options)
+            {
+                return true;
+            }
+            false
         })
     })
 }
