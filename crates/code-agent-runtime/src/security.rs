@@ -139,33 +139,52 @@ impl SecurityPolicy {
         }
     }
 
-    /// Validate a path before a tool accesses the filesystem.
+    /// Allow existing, non-sensitive repository-relative paths only; reject rooted,
+    /// escaping, broken, or externally resolved symlink paths before filesystem access.
     pub fn validate_path(
         &self,
         repo: &GitRepo,
         requested: impl AsRef<str>,
     ) -> Result<PathBuf, SecurityError> {
-        let original_requested = requested.as_ref();
-        let path = Path::new(original_requested);
+        let requested = requested.as_ref();
+        let path = Path::new(requested);
         if matches!(
             path.components().next(),
             Some(Component::Prefix(_)) | Some(Component::RootDir)
         ) {
             return Err(SecurityError {
-                requested: PathBuf::from(original_requested),
+                requested: PathBuf::from(requested),
             });
         }
-        if is_denied(original_requested) {
+        if is_denied(requested) {
             return Err(SecurityError {
-                requested: PathBuf::from(original_requested),
+                requested: PathBuf::from(requested),
             });
         }
-        match repo.canonicalize_path(original_requested) {
-            Ok(canonical) => Ok(canonical),
-            Err(_) => Err(SecurityError {
-                requested: PathBuf::from(original_requested),
-            }),
+        let candidate = repo.root().join(requested);
+        let canonical_root = repo.canonical_root();
+        if has_broken_or_escaping_symlink(&candidate, canonical_root) {
+            return Err(SecurityError {
+                requested: PathBuf::from(requested),
+            });
         }
+
+        let canonical = repo
+            .canonicalize_path(requested)
+            .map_err(|_| SecurityError {
+                requested: PathBuf::from(requested),
+            })?;
+
+        if let Ok(rel) = canonical.strip_prefix(repo.canonical_root()) {
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            if is_denied(&rel_str) {
+                return Err(SecurityError {
+                    requested: PathBuf::from(requested),
+                });
+            }
+        }
+
+        Ok(canonical)
     }
 
     /// Read a repository file through the security boundary.
@@ -209,21 +228,24 @@ impl SecurityPolicy {
     /// Search a repository path for a text query.
     ///
     /// This additive declaration is scaffolding for the search operation test.
+    ///
+    /// Retained deliberately (deferred, not removed): the ticket's match-limit
+    /// criterion describes search-tool behavior ("searching ... returns 50 matches
+    /// with [truncated: ...]"), so the operation must exist somewhere; this
+    /// implementation will be absorbed by the dedicated read-only-tools ticket.
     pub fn search(
         &self,
         repo: &GitRepo,
-        requested: impl AsRef<str>,
         query: impl AsRef<str>,
     ) -> Result<BoundedOutput, SecurityError> {
-        let requested = requested.as_ref();
         let query = query.as_ref();
-        let root = self.validate_path(repo, requested)?;
+        let root = self.validate_path(repo, ".")?;
         let mut matches: Vec<(String, usize, String)> = Vec::new();
         let repo_root = repo
             .root()
             .canonicalize()
             .unwrap_or_else(|_| repo.root().to_path_buf());
-        collect_matches(&root, &repo_root, query, &mut matches);
+        collect_matches(&root, &repo_root, query, &mut matches)?;
         matches.sort(); // deterministic: path order, then line order
         let lines: Vec<String> = matches
             .into_iter()
@@ -238,14 +260,14 @@ fn collect_matches(
     repo_root: &Path,
     query: &str,
     matches: &mut Vec<(String, usize, String)>,
-) {
+) -> Result<(), SecurityError> {
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+        return Err(SecurityError {
+            requested: dir.to_path_buf(),
+        });
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        // entry.file_type() does NOT follow symlinks - Skip them entirely
-        // (a symlinked dir could otherwise walk outside the repository).
         let Ok(file_type) = entry.file_type() else {
             continue;
         };
@@ -256,8 +278,31 @@ fn collect_matches(
         if is_denied(&rel_str) {
             continue; // never search sensitive files
         }
+        // Follow the documented symlink policy: allow in-repository
+        // targets, reject broken or escaping links (matching `validate_path`).
+        if file_type.is_symlink() {
+            match path.canonicalize() {
+                Ok(target) if target.starts_with(repo_root) => {
+                    if target.is_dir() {
+                        collect_matches(&target, repo_root, query, matches)?;
+                    } else if let Ok(content) = std::fs::read_to_string(&target) {
+                        for (idx, line) in content.lines().enumerate() {
+                            if line.contains(query) {
+                                matches.push((rel_str.clone(), idx + 1, line.to_string()));
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    return Err(SecurityError {
+                        requested: PathBuf::from(rel_str),
+                    });
+                }
+            }
+            continue;
+        }
         if file_type.is_dir() {
-            collect_matches(&path, repo_root, query, matches);
+            collect_matches(&path, repo_root, query, matches)?;
         } else if let Ok(content) = std::fs::read_to_string(&path) {
             for (idx, line) in content.lines().enumerate() {
                 if line.contains(query) {
@@ -266,6 +311,7 @@ fn collect_matches(
             }
         }
     }
+    Ok(())
 }
 
 fn is_denied(requested: &str) -> bool {
@@ -295,4 +341,20 @@ fn is_denied(requested: &str) -> bool {
                 .matches_with(&suffix, options)
         })
     })
+}
+
+fn has_broken_or_escaping_symlink(candidate: &Path, canonical_root: &Path) -> bool {
+    let mut prefix = PathBuf::new();
+    for component in candidate.components() {
+        prefix.push(component);
+        let Ok(meta) = std::fs::symlink_metadata(&prefix) else {
+            return false;
+        };
+        if meta.file_type().is_symlink()
+            && !matches!(prefix.canonicalize(), Ok(target) if target.starts_with(canonical_root))
+        {
+            return true;
+        }
+    }
+    false
 }

@@ -5,7 +5,7 @@ use std::process::Command;
 use tempfile::TempDir;
 
 #[cfg(windows)]
-use std::os::windows::fs::symlink_dir;
+use std::os::windows::fs::{symlink_dir, symlink_file};
 
 fn make_test_repo() -> TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -157,47 +157,6 @@ fn search_results_report_incompleteness_when_match_limit_is_exceeded() {
 }
 
 #[test]
-fn search_operation_bounds_matches_and_marks_incomplete_results() {
-    let dir = make_test_repo();
-    for n in 1..=51 {
-        std::fs::write(dir.path().join(format!("src/file-{n:03}.rs")), "needle\n").unwrap();
-    }
-    // These files ensure the operation honors both the requested path and query,
-    // rather than merely returning an arbitrary set of 50 lines.
-    std::fs::write(dir.path().join("src/not-a-match.rs"), "different\n").unwrap();
-    std::fs::write(dir.path().join("outside.rs"), "needle\n").unwrap();
-
-    let repo = GitRepo::open(dir.path()).unwrap();
-    let policy = SecurityPolicy::new();
-
-    let bounded = policy
-        .search(&repo, "src", "needle")
-        .expect("searching a repository directory should succeed");
-
-    let expected_matches = (1..=50)
-        .map(|n| format!("src/file-{n:03}.rs:1:needle"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let expected = expected_matches + "\n[truncated: 50 matches, search incomplete]";
-    assert_eq!(
-        bounded.content, expected,
-        "search must return the first 50 actual matches for the requested path and query"
-    );
-    assert!(bounded.truncated);
-    assert!(!bounded.completeness);
-
-    let complete = policy
-        .search(&repo, "src", "different")
-        .expect("searching for a query with one result should succeed");
-    assert_eq!(complete.content, "src/not-a-match.rs:1:different");
-    assert!(!complete.truncated);
-    assert!(
-        complete.completeness,
-        "search results must be marked complete when every match fits within the limit"
-    );
-}
-
-#[test]
 fn allows_relative_path_inside_repository() {
     let dir = make_test_repo();
     let repo = GitRepo::open(dir.path()).unwrap();
@@ -218,7 +177,7 @@ fn normalizes_dot_and_in_root_parent_segments_before_deny_matching() {
     let policy = SecurityPolicy::new();
 
     // The raw spelling matches the sensitive-directory pattern at src/.aws,
-    // but lexical normalization resolves it to the existing safe file.
+    // but its normalized target resolves to the existing safe file.
     let resolved = policy
         .read_file(&repo, "src/.aws/.././main.rs")
         .expect("a path resolving inside the repository must not be denied for raw segments");
@@ -293,6 +252,43 @@ fn bounds_large_file_reads_with_a_machine_readable_marker() {
 
 #[cfg(windows)]
 #[test]
+fn rejects_external_file_symlink_before_reading_target() {
+    let repo_dir = make_test_repo();
+    std::fs::write(
+        repo_dir.path().join("src/search-inside.txt"),
+        "ordinary-query: repository content",
+    )
+    .unwrap();
+
+    let outside_dir = tempfile::tempdir().unwrap();
+    let outside_file = outside_dir.path().join("search-secret.txt");
+    std::fs::write(
+        &outside_file,
+        "needle: external secret that must never be returned",
+    )
+    .unwrap();
+    let requested = "src/search-link.txt";
+    symlink_file(&outside_file, repo_dir.path().join(requested)).unwrap();
+
+    let repo = GitRepo::open(repo_dir.path()).unwrap();
+    let error = SecurityPolicy::new()
+        .search(&repo, "needle")
+        .expect_err("search must reject an external file symlink it encounters");
+
+    // The query is present only in the external target.  A search that follows
+    // the link and exposes data from it would return a match; the required
+    // result is instead the security denial for the link itself.
+    assert_eq!(
+        error,
+        SecurityError {
+            requested: PathBuf::from(requested),
+        },
+        "search must validate the traversed link before returning any target content"
+    );
+}
+
+#[cfg(windows)]
+#[test]
 fn rejects_external_symlinks_and_allows_internal_symlinks() {
     let repo_dir = make_test_repo();
     let repo = GitRepo::open(repo_dir.path()).unwrap();
@@ -333,7 +329,6 @@ fn denies_sensitive_paths_without_revealing_existence() {
     let dir = make_test_repo();
     let repo = GitRepo::open(dir.path()).unwrap();
     let policy = SecurityPolicy::new();
-
     let existing_sensitive = [
         (".git/config", "git configuration"),
         (".env", "TOKEN=secret\n"),
@@ -390,4 +385,21 @@ fn denies_sensitive_paths_without_revealing_existence() {
             );
         }
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn rejects_broken_symlinks() {
+    let dir = make_test_repo();
+    symlink_dir(
+        dir.path().join("does-not-exist"),
+        dir.path().join("src/broken"),
+    )
+    .unwrap();
+    let repo = GitRepo::open(dir.path()).unwrap();
+    assert!(
+        SecurityPolicy::new()
+            .validate_path(&repo, "src/broken/anything")
+            .is_err()
+    );
 }

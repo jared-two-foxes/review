@@ -75,6 +75,10 @@ impl GitRepo {
     pub fn raw_repo(&self) -> &git2::Repository {
         &self.repo
     }
+
+    pub fn canonical_root(&self) -> &Path {
+        &self.canonical_root
+    }
 }
 
 /// Resolve `.` and `..` components lexically without filesystem access.
