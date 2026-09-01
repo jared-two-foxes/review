@@ -1,9 +1,8 @@
 use agent_kernel::model::{
     CanonicalModelRequest, CanonicalModelResponse, ModelAction, ModelError, ModelProvider,
+    UsageRecord,
 };
 use serde_json::{Value, json};
-use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::time::Duration;
 
 /// OpenAI-compatible model provider adapter.
@@ -15,6 +14,7 @@ pub struct OpenAiProvider {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
+    client: reqwest::blocking::Client,
 }
 
 impl OpenAiProvider {
@@ -23,52 +23,39 @@ impl OpenAiProvider {
         api_key: impl Into<String>,
         model: impl Into<String>,
     ) -> Self {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .expect("Failed to build HTTP client");
         Self {
             base_url: base_url.into(),
             api_key: api_key.into(),
             model: model.into(),
+            client,
         }
     }
 
-    fn http_post(&self, body: &str) -> Result<String, String> {
-        let url = self
-            .base_url
-            .strip_prefix("http://")
-            .ok_or("URL must start with http://")?;
-        let (host_port, path) = url.split_once('/').ok_or("URL must contain a path")?;
-        let (host, port) = host_port
-            .rsplit_once(':')
-            .map(|(h, p)| (h, p.parse::<u16>().unwrap_or(80)))
-            .unwrap_or((host_port, 80));
-        let path = format!("/{path}");
+    fn http_post(&self, body: &str) -> Result<reqwest::blocking::Response, reqwest::Error> {
+        self.client
+            .post(&self.base_url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+            .send()
+    }
 
-        let mut stream = TcpStream::connect((host, port)).map_err(|e| format!("connect: {e}"))?;
-        stream.set_nodelay(true).ok();
-        stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
-        stream.set_write_timeout(Some(Duration::from_secs(30))).ok();
-
-        let request = format!(
-            "POST {} HTTP/1.1\r\nHost: {}:{}\r\nContent-Type: application/json\r\nAuthorization: Bearer {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            path,
-            host,
-            port,
-            self.api_key,
-            body.len(),
-            body
-        );
-        stream
-            .write_all(request.as_bytes())
-            .map_err(|e| format!("write: {e}"))?;
-
-        let mut response = Vec::new();
-        stream
-            .read_to_end(&mut response)
-            .map_err(|e| format!("read: {e}"))?;
-        let response_str = String::from_utf8_lossy(&response);
-        let body_start = response_str
-            .find("\r\n\r\n")
-            .ok_or("no header/body separator in response")?;
-        Ok(response_str[body_start + 4..].to_string())
+    /// Parse provider usage into the provider-independent accounting contract.
+    pub fn normalize_usage(response: &Value) -> UsageRecord {
+        let usage = &response["usage"];
+        let input_tokens = usage["prompt_tokens"].as_u64().unwrap_or(0);
+        let output_tokens = usage["completion_tokens"].as_u64().unwrap_or(0);
+        let estimated_cost_usd =
+            Some((input_tokens as f64 * 0.000001) + (output_tokens as f64 * 0.000002));
+        UsageRecord {
+            input_tokens,
+            output_tokens,
+            estimated_cost_usd,
+        }
     }
 }
 
@@ -111,19 +98,30 @@ impl ModelProvider for OpenAiProvider {
         });
         let body_str = serde_json::to_string(&body).unwrap_or_default();
 
-        let response_body = match self.http_post(&body_str) {
-            Ok(body) => body,
-            Err(e) => {
-                return Err(ModelError::Network(e));
+        let resp = self.http_post(&body_str).map_err(|e| {
+            if e.is_timeout() {
+                ModelError::Timeout(e.to_string())
+            } else {
+                ModelError::Network(e.to_string())
             }
-        };
+        })?;
 
-        let response: Value = match serde_json::from_str(&response_body) {
-            Ok(v) => v,
-            Err(e) => {
-                return Err(ModelError::ApiError(e.to_string()));
-            }
-        };
+        let status = resp.status();
+        if status.as_u16() == 429 {
+            return Err(ModelError::RateLimit(format!(
+                "Rate limit: {}",
+                status.as_u16()
+            )));
+        } else if !status.is_success() {
+            return Err(ModelError::ApiError(format!(
+                "API error: {}",
+                status.as_u16()
+            )));
+        }
+
+        let response: Value = resp
+            .json()
+            .map_err(|e| ModelError::ApiError(e.to_string()))?;
 
         let actions = response["choices"]
             .get(0)
@@ -146,6 +144,10 @@ impl ModelProvider for OpenAiProvider {
             })
             .unwrap_or_default();
 
-        Ok(CanonicalModelResponse { actions })
+        let usage = Self::normalize_usage(&response);
+        Ok(CanonicalModelResponse {
+            actions,
+            usage: Some(usage),
+        })
     }
 }

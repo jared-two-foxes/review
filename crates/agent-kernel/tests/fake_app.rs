@@ -8,7 +8,7 @@ use agent_kernel::model::{
 use agent_kernel::tools::{Tool, ToolCatalog, ToolResult, ToolStatus};
 use agent_protocol::SequenceIdGenerator;
 use serde_json::Value;
-use std::panic::{catch_unwind, panic_any, AssertUnwindSafe};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 struct ScriptedModelProvider {
     responses: Vec<CanonicalModelResponse>,
@@ -224,12 +224,14 @@ fn happy_path_tool_call_then_completion() {
                 tool: "echo".into(),
                 arguments: serde_json::json!({}),
             }],
+            usage: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
                 action_id: "act-2".into(),
                 payload: serde_json::json!({}),
             }],
+            usage: None,
         },
     ]);
 
@@ -247,6 +249,7 @@ fn premature_completion_rejected_then_succeeds() {
                 action_id: "act-1".into(),
                 payload: serde_json::json!({}),
             }],
+            usage: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
@@ -254,12 +257,14 @@ fn premature_completion_rejected_then_succeeds() {
                 tool: "echo".into(),
                 arguments: serde_json::json!({}),
             }],
+            usage: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
                 action_id: "act-3".into(),
                 payload: serde_json::json!({}),
             }],
+            usage: None,
         },
     ]);
 
@@ -278,6 +283,7 @@ fn unknown_tool_rejected() {
                 tool: "nonexistent_tool".into(),
                 arguments: serde_json::json!({}),
             }],
+            usage: None,
         },
         CanonicalModelResponse {
             actions: vec![
@@ -291,6 +297,7 @@ fn unknown_tool_rejected() {
                     payload: serde_json::json!({}),
                 },
             ],
+            usage: None,
         },
     ]);
 
@@ -309,6 +316,7 @@ fn malformed_arguments_rejected() {
                 tool: "echo".into(),
                 arguments: serde_json::json!("not-an-object"),
             }],
+            usage: None,
         },
         CanonicalModelResponse {
             actions: vec![
@@ -322,6 +330,7 @@ fn malformed_arguments_rejected() {
                     payload: serde_json::json!({}),
                 },
             ],
+            usage: None,
         },
     ]);
 

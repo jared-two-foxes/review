@@ -95,12 +95,14 @@ fn scenario_1_golden_match() {
                 tool: "read_change".into(),
                 arguments: json!({}),
             }],
+            usage: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
                 action_id: "act-2".into(),
                 payload: json!({"findings": []}),
             }],
+            usage: None,
         },
     ]);
 
@@ -132,6 +134,7 @@ fn scenario_2_golden_match() {
                 action_id: "act-1".into(),
                 payload: json!({"findings": []}),
             }],
+            usage: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
@@ -139,12 +142,14 @@ fn scenario_2_golden_match() {
                 tool: "read_change".into(),
                 arguments: json!({}),
             }],
+            usage: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
                 action_id: "act-3".into(),
                 payload: json!({"findings": []}),
             }],
+            usage: None,
         },
     ]);
 
@@ -174,6 +179,7 @@ fn scenario_3_golden_match() {
             tool: "nonexistent_tool".into(), // ← not in catalog
             arguments: json!({}),
         }],
+        usage: None,
     }]);
 
     let (result, events) = SessionCoordinator::new(
@@ -203,6 +209,7 @@ fn scenario_4_golden_match() {
             tool: "read_change".into(),        // ← tool EXISTS in catalog
             arguments: json!("not-an-object"), // ← but args fail schema validation
         }],
+        usage: None,
     }]);
 
     let (result, events) = SessionCoordinator::new(

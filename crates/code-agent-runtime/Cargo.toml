@@ -11,6 +11,8 @@ glob = "0.3"
 agent-kernel = { path = "../agent-kernel" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+reqwest = { version = "0.11", features = ["json", "blocking"] }
 
 [dev-dependencies]
 tempfile = "3"
+agent-protocol = { path = "../agent-protocol" }

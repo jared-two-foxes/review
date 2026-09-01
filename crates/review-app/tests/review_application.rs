@@ -3,12 +3,13 @@ use agent_kernel::{
     coordinator::SessionCoordinator,
     ledger::{LedgerEvent, Limits},
     model::{
-        CanonicalModelRequest, CanonicalModelResponse, ModelAction, ModelProvider, ToolDescription,
+        CanonicalModelRequest, CanonicalModelResponse, ModelAction, ModelError, ModelProvider,
+        ToolDescription,
     },
     tools::{Tool, ToolCatalog, ToolResult, ToolStatus},
 };
-use agent_protocol::SequenceIdGenerator;
-use review_app::{FixedClock, ReadChangeTool, ReviewApplication};
+use agent_protocol::{FixedClock, SequenceIdGenerator};
+use review_app::{ReadChangeTool, ReviewApplication};
 use review_protocol::{ReviewRequest, ReviewResult, ReviewStatus};
 use serde_json::{Value, json};
 
@@ -28,10 +29,13 @@ impl ScriptedModelProvider {
 }
 
 impl ModelProvider for ScriptedModelProvider {
-    fn generate(&mut self, _request: &CanonicalModelRequest) -> CanonicalModelResponse {
+    fn generate(
+        &mut self,
+        _request: &CanonicalModelRequest,
+    ) -> Result<CanonicalModelResponse, ModelError> {
         let response = self.responses[self.index].clone();
         self.index += 1;
-        response
+        Ok(response)
     }
 }
 
@@ -68,12 +72,14 @@ fn read_change_then_completion_no_findings_produces_approved() {
                 tool: "read_change".into(),
                 arguments: json!({}),
             }],
+            usage: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
                 action_id: "act-2".into(),
                 payload: json!({"findings": []}),
             }],
+            usage: None,
         },
     ]);
 
@@ -89,6 +95,7 @@ fn premature_completion_rejected_then_approved() {
                 action_id: "act-1".into(),
                 payload: json!({"findings": []}),
             }],
+            usage: None,
         },
         // Turn 2: read the change
         CanonicalModelResponse {
@@ -97,6 +104,7 @@ fn premature_completion_rejected_then_approved() {
                 tool: "read_change".into(),
                 arguments: json!({}),
             }],
+            usage: None,
         },
         // Turn 3: now completion should be accepted
         CanonicalModelResponse {
@@ -104,6 +112,7 @@ fn premature_completion_rejected_then_approved() {
                 action_id: "act-3".into(),
                 payload: json!({"findings": []}),
             }],
+            usage: None,
         },
     ]);
 
@@ -119,6 +128,7 @@ fn blocking_finding_produces_changes_requested() {
                 tool: "read_change".into(),
                 arguments: json!({}),
             }],
+            usage: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
@@ -128,6 +138,7 @@ fn blocking_finding_produces_changes_requested() {
                 found"}]
                 }),
             }],
+            usage: None,
         },
     ]);
 

@@ -10,6 +10,14 @@ pub enum ModelError {
     RateLimit(String),
 }
 
+/// Provider-independent accounting for tokens consumed by a model request.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UsageRecord {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub estimated_cost_usd: Option<f64>,
+}
+
 #[derive(Clone)]
 pub struct ToolDescription {
     pub name: String,
@@ -44,9 +52,17 @@ pub enum ModelAction {
     },
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CanonicalModelResponse {
     pub actions: Vec<ModelAction>,
+    pub usage: Option<UsageRecord>,
+}
+
+impl CanonicalModelResponse {
+    /// Additive access point for provider accounting; populated by the runtime adapter.
+    pub fn usage(&self) -> Option<&UsageRecord> {
+        self.usage.as_ref()
+    }
 }
 
 pub trait ModelProvider {
