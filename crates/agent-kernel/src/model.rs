@@ -2,6 +2,14 @@ use serde_json::Value;
 
 use crate::application::{ContextBlock, InstructionBlock};
 
+#[derive(Debug, Clone)]
+pub enum ModelError {
+    Network(String),
+    Timeout(String),
+    ApiError(String),
+    RateLimit(String),
+}
+
 #[derive(Clone)]
 pub struct ToolDescription {
     pub name: String,
@@ -42,5 +50,8 @@ pub struct CanonicalModelResponse {
 }
 
 pub trait ModelProvider {
-    fn generate(&mut self, request: &CanonicalModelRequest) -> CanonicalModelResponse;
+    fn generate(
+        &mut self,
+        request: &CanonicalModelRequest,
+    ) -> Result<CanonicalModelResponse, ModelError>;
 }

@@ -81,7 +81,17 @@ where
             self.append_event(&session_id, turn, "", "kernel.model_started");
 
             // Call the model
-            let response = self.provider.generate(&model_request);
+            let response = match self.provider.generate(&model_request) {
+                Ok(r) => r,
+                Err(_) => {
+                    self.append_event(&session_id, turn, "", "kernel.model_failed");
+                    self.append_event(&session_id, turn, "", "kernel.session_indeterminate");
+                    return (
+                        self.app.build_terminal_result(&state),
+                        self.ledger.events().to_vec(),
+                    );
+                }
+            };
 
             self.append_event(&session_id, turn, "", "kernel.model_completed");
 

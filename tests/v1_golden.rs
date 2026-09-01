@@ -3,7 +3,7 @@ use std::fs;
 use agent_kernel::coordinator::SessionCoordinator;
 use agent_kernel::ledger::{LedgerEvent, Limits};
 use agent_kernel::model::{
-    CanonicalModelRequest, CanonicalModelResponse, ModelAction, ModelProvider,
+    CanonicalModelRequest, CanonicalModelResponse, ModelAction, ModelError, ModelProvider,
 };
 use agent_kernel::tools::ToolCatalog;
 use agent_protocol::{FixedClock, SequenceIdGenerator};
@@ -48,10 +48,13 @@ impl ScriptedModelProvider {
 }
 
 impl ModelProvider for ScriptedModelProvider {
-    fn generate(&mut self, _request: &CanonicalModelRequest) -> CanonicalModelResponse {
+    fn generate(
+        &mut self,
+        _request: &CanonicalModelRequest,
+    ) -> Result<CanonicalModelResponse, ModelError> {
         let response = self.responses[self.index].clone();
         self.index += 1;
-        response
+        Ok(response)
     }
 }
 

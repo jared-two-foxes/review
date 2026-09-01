@@ -128,7 +128,9 @@ fn openai_provider_round_trips_canonical_request_and_tool_call() {
         "test-api-key",
         "test-model",
     );
-    let response = provider.generate(&request);
+    let response = provider
+        .generate(&request)
+        .expect("provider generate should succeed");
     server
         .join()
         .expect("provider server thread")

@@ -1,5 +1,5 @@
 use agent_kernel::model::{
-    CanonicalModelRequest, CanonicalModelResponse, ModelAction, ModelProvider,
+    CanonicalModelRequest, CanonicalModelResponse, ModelAction, ModelError, ModelProvider,
 };
 use serde_json::{Value, json};
 use std::io::{Read, Write};
@@ -73,7 +73,10 @@ impl OpenAiProvider {
 }
 
 impl ModelProvider for OpenAiProvider {
-    fn generate(&mut self, request: &CanonicalModelRequest) -> CanonicalModelResponse {
+    fn generate(
+        &mut self,
+        request: &CanonicalModelRequest,
+    ) -> Result<CanonicalModelResponse, ModelError> {
         let mut messages = Vec::new();
         for instruction in &request.instructions {
             messages.push(json!({
@@ -110,19 +113,15 @@ impl ModelProvider for OpenAiProvider {
 
         let response_body = match self.http_post(&body_str) {
             Ok(body) => body,
-            Err(_) => {
-                return CanonicalModelResponse {
-                    actions: Vec::new(),
-                };
+            Err(e) => {
+                return Err(ModelError::Network(e));
             }
         };
 
         let response: Value = match serde_json::from_str(&response_body) {
             Ok(v) => v,
-            Err(_) => {
-                return CanonicalModelResponse {
-                    actions: Vec::new(),
-                };
+            Err(e) => {
+                return Err(ModelError::ApiError(e.to_string()));
             }
         };
 
@@ -147,6 +146,6 @@ impl ModelProvider for OpenAiProvider {
             })
             .unwrap_or_default();
 
-        CanonicalModelResponse { actions }
+        Ok(CanonicalModelResponse { actions })
     }
 }

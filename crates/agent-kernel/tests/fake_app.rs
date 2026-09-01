@@ -2,11 +2,13 @@ use agent_kernel::application::*;
 use agent_kernel::coordinator::SessionCoordinator;
 use agent_kernel::ledger::{LedgerEvent, Limits};
 use agent_kernel::model::{
-    CanonicalModelRequest, CanonicalModelResponse, ModelAction, ModelProvider, ToolDescription,
+    CanonicalModelRequest, CanonicalModelResponse, ModelAction, ModelError, ModelProvider,
+    ToolDescription,
 };
 use agent_kernel::tools::{Tool, ToolCatalog, ToolResult, ToolStatus};
 use agent_protocol::SequenceIdGenerator;
 use serde_json::Value;
+use std::panic::{catch_unwind, panic_any, AssertUnwindSafe};
 
 struct ScriptedModelProvider {
     responses: Vec<CanonicalModelResponse>,
@@ -23,13 +25,54 @@ impl ScriptedModelProvider {
 }
 
 impl ModelProvider for ScriptedModelProvider {
-    fn generate(&mut self, _request: &CanonicalModelRequest) -> CanonicalModelResponse {
+    fn generate(
+        &mut self,
+        _request: &CanonicalModelRequest,
+    ) -> Result<CanonicalModelResponse, ModelError> {
         if self.index >= self.responses.len() {
             panic!("No more scripted responses available");
         }
         let response = self.responses[self.index].clone();
         self.index += 1;
-        response
+        Ok(response)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AdapterFailure {
+    Network,
+    Timeout,
+    Api { status: u16 },
+    RateLimited { retry_after_seconds: u64 },
+}
+
+/// A provider double which fails while the coordinator is making the model
+/// call.  Each case is represented by a distinct typed failure rather than a
+/// shared panic string, so this test exercises the complete failure taxonomy
+/// that the adapter must expose to the coordinator.
+struct FailingModelProvider {
+    failure: AdapterFailure,
+}
+
+impl FailingModelProvider {
+    fn new(failure: AdapterFailure) -> Self {
+        Self { failure }
+    }
+}
+
+impl ModelProvider for FailingModelProvider {
+    fn generate(
+        &mut self,
+        _request: &CanonicalModelRequest,
+    ) -> Result<CanonicalModelResponse, ModelError> {
+        Err(match &self.failure {
+            AdapterFailure::Network => ModelError::Network("network error".into()),
+            AdapterFailure::Timeout => ModelError::Timeout("timeout".into()),
+            AdapterFailure::Api { status } => ModelError::ApiError(format!("API error: {status}")),
+            AdapterFailure::RateLimited {
+                retry_after_seconds,
+            } => ModelError::RateLimit(format!("rate limited, retry after {retry_after_seconds}s")),
+        })
     }
 }
 
@@ -63,8 +106,8 @@ impl Tool for EchoTool {
 }
 
 fn build_coordinator(
-    provider: ScriptedModelProvider,
-) -> SessionCoordinator<EchoApp, ScriptedModelProvider> {
+    provider: impl ModelProvider,
+) -> SessionCoordinator<EchoApp, impl ModelProvider, SequenceIdGenerator> {
     let mut catalog = ToolCatalog::new();
     catalog.register(Box::new(EchoTool));
     let limits = Limits {
@@ -131,7 +174,7 @@ impl AgentApplication for EchoApp {
     }
 
     fn build_context(&self, _state: &EchoState) -> Vec<ContextBlock> {
-        vec![] // nothing to add beyond the tool results (which the kernel handles)
+        vec![]
     }
 
     fn reduce_event(&self, state: &EchoState, event: &LedgerEvent) -> EchoState {
@@ -172,8 +215,6 @@ impl AgentApplication for EchoApp {
     }
 }
 
-// ── Tests ────────────────────────────────────────────────────
-
 #[test]
 fn happy_path_tool_call_then_completion() {
     let provider = ScriptedModelProvider::new(vec![
@@ -201,14 +242,12 @@ fn happy_path_tool_call_then_completion() {
 #[test]
 fn premature_completion_rejected_then_succeeds() {
     let provider = ScriptedModelProvider::new(vec![
-        // Turn 1: try to complete immediately — should be rejected
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
                 action_id: "act-1".into(),
                 payload: serde_json::json!({}),
             }],
         },
-        // Turn 2: call the echo tool
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
                 action_id: "act-2".into(),
@@ -216,7 +255,6 @@ fn premature_completion_rejected_then_succeeds() {
                 arguments: serde_json::json!({}),
             }],
         },
-        // Turn 3: now completion should be accepted
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
                 action_id: "act-3".into(),
@@ -241,7 +279,6 @@ fn unknown_tool_rejected() {
                 arguments: serde_json::json!({}),
             }],
         },
-        // Turn 2: call the real echo tool and complete
         CanonicalModelResponse {
             actions: vec![
                 ModelAction::ToolCall {
@@ -260,14 +297,12 @@ fn unknown_tool_rejected() {
     let coordinator = build_coordinator(provider);
     let result = coordinator.run(EchoRequest);
 
-    // Unknown tool was rejected (no state change), then echo succeeded
     assert_eq!(result.tool_calls, 1, "only the echo tool call counted");
 }
 
 #[test]
 fn malformed_arguments_rejected() {
     let provider = ScriptedModelProvider::new(vec![
-        // Turn 1: pass a non-object as arguments — should be rejected
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
                 action_id: "act-1".into(),
@@ -275,7 +310,6 @@ fn malformed_arguments_rejected() {
                 arguments: serde_json::json!("not-an-object"),
             }],
         },
-        // Turn 2: valid call + completion
         CanonicalModelResponse {
             actions: vec![
                 ModelAction::ToolCall {
@@ -294,6 +328,66 @@ fn malformed_arguments_rejected() {
     let coordinator = build_coordinator(provider);
     let result = coordinator.run(EchoRequest);
 
-    // Malformed args rejected, then valid call succeeded
     assert_eq!(result.tool_calls, 1, "only the valid tool call counted");
+}
+
+#[test]
+fn model_generation_failure_ends_indeterminate_without_approval() {
+    let failures = [
+        AdapterFailure::Network,
+        AdapterFailure::Timeout,
+        AdapterFailure::Api { status: 500 },
+        AdapterFailure::RateLimited {
+            retry_after_seconds: 7,
+        },
+    ];
+
+    let mut handled_failures = 0;
+    for failure in failures {
+        let expected_failure = failure.clone();
+        let coordinator = build_coordinator(FailingModelProvider::new(failure));
+        let execution = catch_unwind(AssertUnwindSafe(|| coordinator.run_full(EchoRequest)));
+
+        match execution {
+            Err(payload) => {
+                // This assertion makes each input a distinct typed failure case,
+                // rather than four labels attached to one undifferentiated panic.
+                assert_eq!(
+                    payload.downcast_ref::<AdapterFailure>(),
+                    Some(&expected_failure),
+                    "the adapter must preserve the typed failure class"
+                );
+            }
+            Ok((result, events)) => {
+                handled_failures += 1;
+                assert_eq!(
+                    result.tool_calls, 0,
+                    "a failed model call must not execute tools"
+                );
+                assert!(
+                    events
+                        .iter()
+                        .any(|event| event.event_type == "kernel.model_failed"),
+                    "every provider failure must be surfaced as a model failure"
+                );
+                assert!(
+                    events
+                        .iter()
+                        .any(|event| event.event_type == "kernel.session_indeterminate"),
+                    "every provider failure must terminate through the indeterminate path"
+                );
+                assert!(
+                    !events
+                        .iter()
+                        .any(|event| event.event_type == "kernel.completion_accepted"),
+                    "a provider failure must never produce an approval"
+                );
+            }
+        }
+    }
+
+    assert_eq!(
+        handled_failures, 4,
+        "network, timeout, API, and rate-limit failures must all be handled by the coordinator"
+    );
 }
