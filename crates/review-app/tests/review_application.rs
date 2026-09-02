@@ -6,7 +6,7 @@ use agent_kernel::{
     },
     tools::ToolCatalog,
 };
-use agent_protocol::{FixedClock, SequenceIdGenerator};
+use agent_protocol::{FixedClock, RandomIdGenerator, SequenceIdGenerator, SystemClock};
 use review_app::{ReadChangeTool, ReviewApplication};
 use review_protocol::{ReviewRequest, ReviewResult, ReviewStatus};
 use serde_json::json;
@@ -149,4 +149,50 @@ fn blocking_finding_produces_changes_requested() {
     ]);
 
     assert!(matches!(result.status, ReviewStatus::ChangesRequested));
+}
+
+#[test]
+fn review_application_constructible_with_production_clock_and_id_generator() {
+    let provider = ScriptedModelProvider::new(vec![
+        CanonicalModelResponse {
+            actions: vec![ModelAction::ToolCall {
+                action_id: "act-1".into(),
+                tool: "read_change".into(),
+                arguments: json!({}),
+            }],
+            usage: None,
+        },
+        CanonicalModelResponse {
+            actions: vec![ModelAction::CompletionRequest {
+                action_id: "act-2".into(),
+                payload: json!({"findings": []}),
+            }],
+            usage: None,
+        },
+    ]);
+    let mut catalog = ToolCatalog::new();
+    catalog.register(Box::new(ReadChangeTool));
+    let limits = Limits {
+        max_turns: 10,
+        max_tool_calls: 10,
+        max_completion_attempts: 10,
+    };
+    let app = ReviewApplication::new_with_sources(SystemClock::new(), RandomIdGenerator::new());
+    let coordinator =
+        SessionCoordinator::new(app, provider, RandomIdGenerator::new(), catalog, limits);
+    let request = ReviewRequest {
+        schema: "review.request/v1".into(),
+        repository_path: ".".into(),
+    };
+    let result = coordinator.run(request);
+
+    assert!(matches!(result.status, ReviewStatus::Approved));
+    assert!(
+        !result.review_id.is_empty(),
+        "review_id must be populated by the production id generator"
+    );
+    assert!(
+        !result.completed_at.is_empty(),
+        "completed_at must be populated by the production clock"
+    );
 }

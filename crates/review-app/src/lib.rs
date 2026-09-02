@@ -39,7 +39,7 @@ pub fn run_review_with_sources<C: Clock, I: IdGenerator>(
         status: ReviewStatus::Indeterminate,
         reason: ReviewReason::ReviewEngineNotAvailable,
         review_id: ids.next_id(),
-        completed_at: clock.now().to_string(),
+        completed_at: clock.now(),
     };
     serde_json::to_vec(&result).expect("review result is serializable")
 }
@@ -198,7 +198,7 @@ impl AgentApplication for ReviewApplication {
                 ReviewReason::ReviewEngineNotAvailable
             },
             review_id: self.id_gen.borrow_mut().next_id(),
-            completed_at: self.clock.borrow().now().to_string(),
+            completed_at: self.clock.borrow().now(),
         }
     }
 }

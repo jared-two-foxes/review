@@ -1,8 +1,11 @@
 use std::collections::VecDeque;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
+use uuid::Uuid;
 
 /// An injectable source of application time.
 pub trait Clock {
-    fn now(&self) -> &str;
+    fn now(&self) -> String;
 }
 
 /// An injectable source of identifiers.
@@ -25,8 +28,26 @@ impl FixedClock {
 }
 
 impl Clock for FixedClock {
-    fn now(&self) -> &str {
-        &self.value
+    fn now(&self) -> String {
+        self.value.clone()
+    }
+}
+
+/// Production wall-clock source returning ISO-8601 UTC timestamps.
+#[derive(Clone, Debug, Default)]
+pub struct SystemClock;
+
+impl SystemClock {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Clock for SystemClock {
+    fn now(&self) -> String {
+        OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .expect("system UTC time is RFC3339-formatable")
     }
 }
 
@@ -47,5 +68,21 @@ impl SequenceIdGenerator {
 impl IdGenerator for SequenceIdGenerator {
     fn next_id(&mut self) -> String {
         self.ids.pop_front().unwrap_or_default()
+    }
+}
+
+/// Production identifier source producing UUID v4 strings.
+#[derive(Clone, Debug, Default)]
+pub struct RandomIdGenerator;
+
+impl RandomIdGenerator {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl IdGenerator for RandomIdGenerator {
+    fn next_id(&mut self) -> String {
+        Uuid::new_v4().to_string()
     }
 }

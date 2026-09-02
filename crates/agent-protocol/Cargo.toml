@@ -2,3 +2,7 @@
 name = "agent-protocol"
 version = "0.1.0"
 edition = "2024"
+
+[dependencies]
+time = { version = "0.3", features = ["formatting"] }
+uuid = { version = "1", features = ["v4"] }
