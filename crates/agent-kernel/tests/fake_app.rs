@@ -9,6 +9,7 @@ use agent_kernel::tools::{Tool, ToolCatalog, ToolResult, ToolStatus};
 use agent_protocol::SequenceIdGenerator;
 use serde_json::Value;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::time::Instant;
 
 struct ScriptedModelProvider {
     responses: Vec<CanonicalModelResponse>,
@@ -35,6 +36,14 @@ impl ModelProvider for ScriptedModelProvider {
         let response = self.responses[self.index].clone();
         self.index += 1;
         Ok(response)
+    }
+
+    fn generate_with_deadline(
+        &mut self,
+        request: &CanonicalModelRequest,
+        _instant: Instant,
+    ) -> Result<CanonicalModelResponse, ModelError> {
+        self.generate(request)
     }
 }
 
@@ -73,6 +82,14 @@ impl ModelProvider for FailingModelProvider {
                 retry_after_seconds,
             } => ModelError::RateLimit(format!("rate limited, retry after {retry_after_seconds}s")),
         })
+    }
+
+    fn generate_with_deadline(
+        &mut self,
+        request: &CanonicalModelRequest,
+        _deadline: Instant,
+    ) -> Result<CanonicalModelResponse, ModelError> {
+        self.generate(request)
     }
 }
 

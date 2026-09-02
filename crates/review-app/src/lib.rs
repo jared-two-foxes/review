@@ -15,7 +15,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::cell::RefCell;
 
-pub fn run_review(request: &ReviewRequest) -> ReviewResult {
+pub fn run_review(_request: &ReviewRequest) -> ReviewResult {
     ReviewResult {
         schema: "review.result/v1".to_string(),
         status: ReviewStatus::Indeterminate,
@@ -30,7 +30,7 @@ pub fn run_review(request: &ReviewRequest) -> ReviewResult {
 /// This is deliberately only a compile-time seam until the canonical result
 /// envelope is implemented.
 pub fn run_review_with_sources<C: Clock, I: IdGenerator>(
-    request: &ReviewRequest,
+    _request: &ReviewRequest,
     clock: &C,
     ids: &mut I,
 ) -> Vec<u8> {
@@ -61,6 +61,7 @@ pub struct Finding {
     pub message: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct ReviewError(String);
 
@@ -111,7 +112,7 @@ impl AgentApplication for ReviewApplication {
 
     fn initialize(
         &self,
-        request: &Self::Request,
+        _request: &Self::Request,
     ) -> Result<ApplicationInitialization<Self::State>, Self::Error> {
         Ok(ApplicationInitialization {
             initial_state: ReviewState {
@@ -124,16 +125,16 @@ impl AgentApplication for ReviewApplication {
         })
     }
 
-    fn build_system_instructions(&self, state: &Self::State) -> Vec<InstructionBlock> {
+    fn build_system_instructions(&self, _state: &Self::State) -> Vec<InstructionBlock> {
         vec![]
     }
 
-    fn build_context(&self, state: &Self::State) -> Vec<ContextBlock> {
+    fn build_context(&self, _state: &Self::State) -> Vec<ContextBlock> {
         vec![]
     }
 
     fn validate_request(&self, request: &Self::Request) -> Result<(), Self::Error> {
-        review_protocol::validate_request(request).map_err(|msg| ReviewError(msg))
+        review_protocol::validate_request(request).map_err(ReviewError)
     }
 
     fn validate_completion(
@@ -167,11 +168,11 @@ impl AgentApplication for ReviewApplication {
     }
 
     fn parse_completion(&self, payload: &Value) -> Result<Self::Completion, Self::Error> {
-        Ok(serde_json::from_value(payload.clone())
-            .map_err(|e| ReviewError(format!("invalid completion payload: {}", e)))?)
+        serde_json::from_value(payload.clone())
+            .map_err(|e| ReviewError(format!("invalid completion payload: {}", e)))
     }
 
-    fn build_terminal_result(&self, state: &Self::State) -> Self::Result {
+    fn build_terminal_result(&self, _state: &Self::State) -> Self::Result {
         let accepted = *self.completion_accepted.borrow();
         let pending = self.pending_completion.borrow();
         let empty_binding = vec![];
@@ -226,7 +227,7 @@ impl Tool for ReadChangeTool {
             .map_err(|error| format!("invalid arguments: {error}"))
     }
 
-    fn execute(&self, arguments: &Value) -> ToolResult {
+    fn execute(&self, _arguments: &Value) -> ToolResult {
         ToolResult {
             status: ToolStatus::Succeeded,
             value: json!({"summary": "Modified file.rs: changed

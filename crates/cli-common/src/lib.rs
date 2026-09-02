@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::fs::File;
 use std::io::{Error as IoError, Read, Write};
 use std::path::Path;

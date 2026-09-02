@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::time::Instant;
 
 use crate::application::{ContextBlock, InstructionBlock};
 
@@ -69,5 +70,11 @@ pub trait ModelProvider {
     fn generate(
         &mut self,
         request: &CanonicalModelRequest,
+    ) -> Result<CanonicalModelResponse, ModelError>;
+
+    fn generate_with_deadline(
+        &mut self,
+        request: &CanonicalModelRequest,
+        deadline: Instant,
     ) -> Result<CanonicalModelResponse, ModelError>;
 }

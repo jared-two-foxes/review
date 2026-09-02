@@ -269,7 +269,9 @@ fn openai_provider_attaches_reported_usage_to_generated_response() {
             .set_read_timeout(Some(Duration::from_secs(2)))
             .expect("configure usage provider connection");
         let mut request = [0_u8; 4096];
-        let count = stream.read(&mut request).expect("read usage provider request");
+        let count = stream
+            .read(&mut request)
+            .expect("read usage provider request");
         assert!(count > 0, "generate must issue a provider request");
         let reply = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -492,6 +494,14 @@ mod coordinator_failure_tests {
                 *self.saw_timeout.lock().expect("record timeout") = true;
             }
             result
+        }
+
+        fn generate_with_deadline(
+            &mut self,
+            request: &CanonicalModelRequest,
+            _deadline: Instant,
+        ) -> Result<agent_kernel::model::CanonicalModelResponse, ModelError> {
+            self.generate(request)
         }
     }
 

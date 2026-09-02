@@ -56,6 +56,14 @@ impl ModelProvider for ScriptedModelProvider {
         self.index += 1;
         Ok(response)
     }
+
+    fn generate_with_deadline(
+        &mut self,
+        request: &CanonicalModelRequest,
+        _deadline: std::time::Instant,
+    ) -> Result<CanonicalModelResponse, ModelError> {
+        self.generate(request)
+    }
 }
 
 fn build_limits(max_turns: u32) -> Limits {

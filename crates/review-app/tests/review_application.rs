@@ -1,17 +1,15 @@
 use agent_kernel::{
-    application::AgentApplication,
     coordinator::SessionCoordinator,
-    ledger::{LedgerEvent, Limits},
+    ledger::Limits,
     model::{
         CanonicalModelRequest, CanonicalModelResponse, ModelAction, ModelError, ModelProvider,
-        ToolDescription,
     },
-    tools::{Tool, ToolCatalog, ToolResult, ToolStatus},
+    tools::ToolCatalog,
 };
 use agent_protocol::{FixedClock, SequenceIdGenerator};
 use review_app::{ReadChangeTool, ReviewApplication};
 use review_protocol::{ReviewRequest, ReviewResult, ReviewStatus};
-use serde_json::{Value, json};
+use serde_json::json;
 
 // ── Scripted provider (same pattern as fake_app) ──
 struct ScriptedModelProvider {
@@ -36,6 +34,14 @@ impl ModelProvider for ScriptedModelProvider {
         let response = self.responses[self.index].clone();
         self.index += 1;
         Ok(response)
+    }
+
+    fn generate_with_deadline(
+        &mut self,
+        request: &CanonicalModelRequest,
+        _deadline: std::time::Instant,
+    ) -> Result<CanonicalModelResponse, ModelError> {
+        self.generate(request)
     }
 }
 

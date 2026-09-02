@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::process;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -31,7 +30,7 @@ fn main() {
 
     let request: review_protocol::ReviewRequest = match cli_common::parse_strict_json(&bytes) {
         Ok(r) => r,
-        Err(cli_common::ParseError::Syntax(e)) => {
+        Err(cli_common::ParseError::Syntax(_e)) => {
             return emit_error("REQUEST_PARSE_FAILED", "request is not valid JSON");
         }
         Err(cli_common::ParseError::DuplicateKey(key)) => {

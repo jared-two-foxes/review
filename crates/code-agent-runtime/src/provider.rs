@@ -3,7 +3,7 @@ use agent_kernel::model::{
     UsageRecord,
 };
 use serde_json::{Value, json};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// OpenAI-compatible model provider adapter.
 ///
@@ -35,35 +35,23 @@ impl OpenAiProvider {
         }
     }
 
-    fn http_post(&self, body: &str) -> Result<reqwest::blocking::Response, reqwest::Error> {
-        self.client
-            .post(&self.base_url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .body(body.to_string())
-            .send()
-    }
-
-    /// Parse provider usage into the provider-independent accounting contract.
-    pub fn normalize_usage(response: &Value) -> UsageRecord {
-        let usage = &response["usage"];
-        let input_tokens = usage["prompt_tokens"].as_u64().unwrap_or(0);
-        let output_tokens = usage["completion_tokens"].as_u64().unwrap_or(0);
-        let estimated_cost_usd =
-            Some((input_tokens as f64 * 0.000001) + (output_tokens as f64 * 0.000002));
-        UsageRecord {
-            input_tokens,
-            output_tokens,
-            estimated_cost_usd,
-        }
-    }
-}
-
-impl ModelProvider for OpenAiProvider {
-    fn generate(
+    fn generate_impl(
         &mut self,
         request: &CanonicalModelRequest,
+        deadline: Option<Instant>,
     ) -> Result<CanonicalModelResponse, ModelError> {
+        let per_request_timeout = match deadline {
+            Some(d) => match d.checked_duration_since(Instant::now()) {
+                Some(r) if r > Duration::ZERO => Some(r),
+                _ => {
+                    return Err(ModelError::Timeout(
+                        "caller deadline already exceeded".into(),
+                    ));
+                }
+            },
+            None => None, // fall back to the client's 30s default
+        };
+
         let mut messages = Vec::new();
         for instruction in &request.instructions {
             messages.push(json!({
@@ -98,13 +86,15 @@ impl ModelProvider for OpenAiProvider {
         });
         let body_str = serde_json::to_string(&body).unwrap_or_default();
 
-        let resp = self.http_post(&body_str).map_err(|e| {
-            if e.is_timeout() {
-                ModelError::Timeout(e.to_string())
-            } else {
-                ModelError::Network(e.to_string())
-            }
-        })?;
+        let resp = self
+            .http_post(&body_str, per_request_timeout)
+            .map_err(|e| {
+                if e.is_timeout() {
+                    ModelError::Timeout(e.to_string())
+                } else {
+                    ModelError::Network(e.to_string())
+                }
+            })?;
 
         let status = resp.status();
         if status.as_u16() == 429 {
@@ -149,5 +139,57 @@ impl ModelProvider for OpenAiProvider {
             actions,
             usage: Some(usage),
         })
+    }
+
+    fn http_post(
+        &self,
+        body: &str,
+        timeout: Option<Duration>,
+    ) -> Result<reqwest::blocking::Response, reqwest::Error> {
+        let mut req = self
+            .client
+            .post(&self.base_url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .body(body.to_string());
+        if let Some(t) = timeout {
+            req = req.timeout(t);
+        }
+        req.send()
+    }
+
+    /// Parse provider usage into the provider-independent accounting contract.
+    pub fn normalize_usage(response: &Value) -> UsageRecord {
+        let usage = &response["usage"];
+        let input_tokens = usage["prompt_tokens"].as_u64().unwrap_or(0);
+        let output_tokens = usage["completion_tokens"].as_u64().unwrap_or(0);
+        let estimated_cost_usd =
+            Some((input_tokens as f64 * 0.000001) + (output_tokens as f64 * 0.000002));
+        UsageRecord {
+            input_tokens,
+            output_tokens,
+            estimated_cost_usd,
+        }
+    }
+}
+
+impl ModelProvider for OpenAiProvider {
+    fn generate(
+        &mut self,
+        request: &CanonicalModelRequest,
+    ) -> Result<CanonicalModelResponse, ModelError> {
+        self.generate_impl(request, None)
+    }
+
+    /// Execute a generation request with a caller-supplied deadline.
+    ///
+    /// Enforces the caller-supplied deadline via a per-request HTTP timeout.  Returns
+    /// ModelError::Timeout if the provider has not responded by deadline.
+    fn generate_with_deadline(
+        &mut self,
+        request: &CanonicalModelRequest,
+        deadline: Instant,
+    ) -> Result<CanonicalModelResponse, ModelError> {
+        self.generate_impl(request, Some(deadline))
     }
 }
