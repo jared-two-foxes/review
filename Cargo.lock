@@ -1520,6 +1520,7 @@ version = "0.1.0"
 dependencies = [
  "agent-kernel",
  "agent-protocol",
+ "code-agent-runtime",
  "jsonschema 0.29.1",
  "review-protocol",
  "serde",

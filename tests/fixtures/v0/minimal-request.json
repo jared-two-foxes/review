@@ -1,4 +1,6 @@
 {
   "schema": "review.request/v1",
-  "repository_path": "."
+  "repository_path": ".",
+  "base_ref": "HEAD~1",
+  "head_ref": "HEAD"
 }

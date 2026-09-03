@@ -24,6 +24,7 @@ fn valid_minimal_request_produces_indeterminate_result() {
             "--format",
             "json",
         ])
+        .env("OPENAI_API_KEY", "")
         .output()
         .expect("review CLI should be executable");
 

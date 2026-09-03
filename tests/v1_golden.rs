@@ -71,6 +71,7 @@ fn build_limits(max_turns: u32) -> Limits {
         max_turns,
         max_tool_calls: 10,
         max_completion_attempts: 10,
+        wall_clock_budget: None,
     }
 }
 
@@ -84,6 +85,8 @@ fn build_request() -> ReviewRequest {
     ReviewRequest {
         schema: "review.request/v1".into(),
         repository_path: ".".into(),
+        base_ref: "HEAD~1".into(),
+        head_ref: "HEAD".into(),
     }
 }
 
@@ -100,7 +103,7 @@ fn scenario_1_golden_match() {
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
                 action_id: "act-1".into(),
-                tool: "read_change".into(),
+                tool: "get_change_summary".into(),
                 arguments: json!({}),
             }],
             usage: None,
@@ -147,7 +150,7 @@ fn scenario_2_golden_match() {
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
                 action_id: "act-2".into(),
-                tool: "read_change".into(),
+                tool: "get_change_summary".into(),
                 arguments: json!({}),
             }],
             usage: None,
@@ -214,7 +217,7 @@ fn scenario_4_golden_match() {
     let provider = ScriptedModelProvider::new(vec![CanonicalModelResponse {
         actions: vec![ModelAction::ToolCall {
             action_id: "act-1".into(),
-            tool: "read_change".into(),        // ← tool EXISTS in catalog
+            tool: "get_change_summary".into(), // ← tool EXISTS in catalog
             arguments: json!("not-an-object"), // ← but args fail schema validation
         }],
         usage: None,

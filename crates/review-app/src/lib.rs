@@ -4,25 +4,133 @@ use agent_kernel::application::{
     AgentApplication, ApplicationDescriptor, ApplicationInitialization, CompletionDecision,
     ContextBlock, InstructionBlock,
 };
+use agent_kernel::coordinator::SessionCoordinator;
+use agent_kernel::tools::ToolCatalog;
 use agent_kernel::{
-    ledger::LedgerEvent,
+    ledger::{LedgerEvent, Limits},
     model::ToolDescription,
     tools::{Tool, ToolResult, ToolStatus},
 };
-use agent_protocol::{Clock, IdGenerator};
+use agent_protocol::{Clock, IdGenerator, RandomIdGenerator, SystemClock};
+use code_agent_runtime::provider::OpenAiProvider;
+use code_agent_runtime::tools::{
+    GetChangeSummaryTool, GetChangedFilesTool, ListDirectoryTool, ReadDiffTool, ReadFileTool,
+    SearchTextTool,
+};
+use code_agent_runtime::{repo::GitRepo, security::SecurityPolicy};
 use review_protocol::{ReviewReason, ReviewRequest, ReviewResult, ReviewStatus};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::cell::RefCell;
+use std::path::Path;
+use std::time::Duration;
 
-pub fn run_review(_request: &ReviewRequest) -> ReviewResult {
-    ReviewResult {
-        schema: "review.result/v1".to_string(),
-        status: ReviewStatus::Indeterminate,
-        reason: ReviewReason::ReviewEngineNotAvailable,
-        review_id: String::new(),
-        completed_at: String::new(),
+pub struct ReviewConfig {
+    pub api_key: String,
+    pub model: String,
+    pub base_url: String,
+    pub max_turns: u32,
+    pub max_tool_calls: u32,
+    pub max_completion_attempts: u32,
+    pub wall_clock_budget: Option<Duration>,
+}
+
+impl Default for ReviewConfig {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            model: "gpt-4o".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            max_turns: 10,
+            max_tool_calls: 10,
+            max_completion_attempts: 3,
+            wall_clock_budget: Some(Duration::from_secs(60)),
+        }
     }
+}
+
+pub fn run_review(request: &ReviewRequest, config: &ReviewConfig) -> ReviewResult {
+    match compose_and_run(request, config) {
+        Ok(result) => result,
+        Err(_) => ReviewResult {
+            schema: "review.result/v1".to_string(),
+            status: ReviewStatus::Indeterminate,
+            reason: ReviewReason::ReviewEngineNotAvailable,
+            review_id: String::new(),
+            completed_at: String::new(),
+        },
+    }
+}
+
+fn open_repo(path: &Path) -> Result<GitRepo, String> {
+    GitRepo::open(path).map_err(|e| format!("open repository: {e:?}"))
+}
+
+fn compose_and_run(request: &ReviewRequest, config: &ReviewConfig) -> Result<ReviewResult, String> {
+    if config.api_key.is_empty() {
+        return Err("missing API key".into());
+    }
+    let path = Path::new(&request.repository_path);
+    let ref_repo = open_repo(path)?;
+    let base = ref_repo
+        .revparse_single(&request.base_ref)
+        .map_err(|e| format!("resolve base_ref: {e:?}"))?
+        .id();
+    let head = ref_repo
+        .revparse_single(&request.head_ref)
+        .map_err(|e| format!("resolve head_ref: {e:?}"))?
+        .id();
+    drop(ref_repo);
+
+    let byte_limit = 65_536usize;
+    let mut catalog = ToolCatalog::new();
+
+    catalog.register(Box::new(GetChangeSummaryTool::new(
+        open_repo(path)?,
+        base,
+        head,
+    )));
+    catalog.register(Box::new(GetChangedFilesTool::new(
+        open_repo(path)?,
+        base,
+        head,
+    )));
+    catalog.register(Box::new(ReadDiffTool::new(
+        open_repo(path)?,
+        base,
+        head,
+        byte_limit,
+    )));
+    catalog.register(Box::new(ReadFileTool::new(
+        open_repo(path)?,
+        head,
+        byte_limit,
+    )));
+    catalog.register(Box::new(ListDirectoryTool::new(
+        open_repo(path)?,
+        SecurityPolicy::new(),
+    )));
+    catalog.register(Box::new(SearchTextTool::new(
+        open_repo(path)?,
+        SecurityPolicy::new(),
+    )));
+
+    let provider = OpenAiProvider::new(
+        config.base_url.as_str(),
+        config.api_key.as_str(),
+        config.model.as_str(),
+    );
+    let app = ReviewApplication::new_with_sources(SystemClock::new(), RandomIdGenerator::new());
+    let limits = Limits {
+        max_turns: config.max_turns,
+        max_tool_calls: config.max_tool_calls,
+        max_completion_attempts: config.max_completion_attempts,
+        wall_clock_budget: config.wall_clock_budget,
+    };
+    let coordinator =
+        SessionCoordinator::new(app, provider, RandomIdGenerator::new(), catalog, limits);
+    let (result, _events) = coordinator.run_full(request.clone());
+    Ok(result)
 }
 
 /// Deterministic output seam for replay tests.
@@ -119,7 +227,14 @@ impl AgentApplication for ReviewApplication {
                 inspected: false,
                 findings: vec![],
             },
-            requested_tools: vec!["read_change".into()],
+            requested_tools: vec![
+                "get_change_summary".into(),
+                "get_changed_files".into(),
+                "read_diff".into(),
+                "read_file".into(),
+                "list_directory".into(),
+                "search_text".into(),
+            ],
             requested_capabilities: vec![],
             application_limits: None,
         })
@@ -147,7 +262,7 @@ impl AgentApplication for ReviewApplication {
                 reason_codes: vec!["change_not_inspected".into()],
                 missing_requirements: vec!["The change has not been inspected".into()],
                 feedback_for_model: vec![InstructionBlock {
-                    content: "You must call the read_change tool before completing.".into(),
+                    content: "You must call the get_change_summary tool before completing.".into(),
                 }],
             }
         } else {
@@ -207,12 +322,12 @@ pub struct ReadChangeTool;
 
 impl Tool for ReadChangeTool {
     fn name(&self) -> &str {
-        "read_change"
+        "get_change_summary"
     }
 
     fn description(&self) -> ToolDescription {
         ToolDescription {
-            name: "read_change".into(),
+            name: "get_change_summary".into(),
             description: "Read the change summary for review.".into(),
             input_schema: serde_json::json!({"type":"object", "additionalProperties": false}),
         }

@@ -54,6 +54,7 @@ fn run_review(responses: Vec<CanonicalModelResponse>) -> ReviewResult {
         max_turns: 10,
         max_tool_calls: 10,
         max_completion_attempts: 10,
+        wall_clock_budget: None,
     };
     let clock = FixedClock::new("2025-01-01T00:00:00Z");
     let app_id_gen = SequenceIdGenerator::new(["rev-001"]);
@@ -63,6 +64,8 @@ fn run_review(responses: Vec<CanonicalModelResponse>) -> ReviewResult {
     let request = ReviewRequest {
         schema: "review.request/v1".into(),
         repository_path: ".".into(),
+        base_ref: "HEAD~1".into(),
+        head_ref: "HEAD".into(),
     };
     coordinator.run(request)
 }
@@ -75,7 +78,7 @@ fn read_change_then_completion_no_findings_produces_approved() {
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
                 action_id: "act-1".into(),
-                tool: "read_change".into(),
+                tool: "get_change_summary".into(),
                 arguments: json!({}),
             }],
             usage: None,
@@ -107,7 +110,7 @@ fn premature_completion_rejected_then_approved() {
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
                 action_id: "act-2".into(),
-                tool: "read_change".into(),
+                tool: "get_change_summary".into(),
                 arguments: json!({}),
             }],
             usage: None,
@@ -131,7 +134,7 @@ fn blocking_finding_produces_changes_requested() {
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
                 action_id: "act-1".into(),
-                tool: "read_change".into(),
+                tool: "get_change_summary".into(),
                 arguments: json!({}),
             }],
             usage: None,
@@ -157,7 +160,7 @@ fn review_application_constructible_with_production_clock_and_id_generator() {
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
                 action_id: "act-1".into(),
-                tool: "read_change".into(),
+                tool: "get_change_summary".into(),
                 arguments: json!({}),
             }],
             usage: None,
@@ -176,6 +179,7 @@ fn review_application_constructible_with_production_clock_and_id_generator() {
         max_turns: 10,
         max_tool_calls: 10,
         max_completion_attempts: 10,
+        wall_clock_budget: None,
     };
     let app = ReviewApplication::new_with_sources(SystemClock::new(), RandomIdGenerator::new());
     let coordinator =
@@ -183,6 +187,8 @@ fn review_application_constructible_with_production_clock_and_id_generator() {
     let request = ReviewRequest {
         schema: "review.request/v1".into(),
         repository_path: ".".into(),
+        base_ref: "HEAD~1".into(),
+        head_ref: "HEAD".into(),
     };
     let result = coordinator.run(request);
 

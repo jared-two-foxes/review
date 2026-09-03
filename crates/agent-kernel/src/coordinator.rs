@@ -1,4 +1,5 @@
 use agent_protocol::IdGenerator;
+use std::time::Instant;
 
 use crate::application::{AgentApplication, CompletionDecision};
 use crate::ledger::{InMemoryLedger, LedgerEvent, Limits};
@@ -58,6 +59,10 @@ where
         let mut tool_call_count = 0u32;
         let mut completion_attempt_count = 0u32;
         let session_id = self.id_gen.next_id();
+        let session_deadline = self
+            .limits
+            .wall_clock_budget
+            .map(|budget| Instant::now() + budget);
 
         // Main Loop
         loop {
@@ -81,7 +86,13 @@ where
             self.append_event(&session_id, turn, "", "kernel.model_started");
 
             // Call the model
-            let response = match self.provider.generate(&model_request) {
+            let generation = match session_deadline {
+                Some(deadline) => self
+                    .provider
+                    .generate_with_deadline(&model_request, deadline),
+                None => self.provider.generate(&model_request),
+            };
+            let response = match generation {
                 Ok(r) => r,
                 Err(_) => {
                     self.append_event(&session_id, turn, "", "kernel.model_failed");

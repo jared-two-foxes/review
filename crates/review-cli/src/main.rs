@@ -1,9 +1,17 @@
+use review_app::ReviewConfig;
+use review_protocol::ReviewStatus;
 use std::path::Path;
+use std::time::Duration;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     let mut request_path: Option<&str> = None;
+    let mut model: String = "gpt-4o".into();
+    let mut base_url: String = "https://api.openai.com/v1/chat/completions".into();
+    let mut max_turns: u32 = 10;
+    let mut wall_clock_budget_secs: u64 = 60;
+
     let mut i = 1; // Skip program name
     while i < args.len() {
         match args[i].as_str() {
@@ -14,6 +22,22 @@ fn main() {
             }
             "--format" => {
                 // V0 only supports JSON; accept and ignore for now.
+                i += 1;
+            }
+            "--model" => {
+                model = args[i + 1].clone();
+                i += 1;
+            }
+            "--base-url" => {
+                base_url = args[i + 1].clone();
+                i += 1;
+            }
+            "--max-turns" => {
+                max_turns = args[i + 1].parse().unwrap_or(10);
+                i += 1;
+            }
+            "--wall-clock-budget-secs" => {
+                wall_clock_budget_secs = args[i + 1].parse().unwrap_or(60);
                 i += 1;
             }
             _ => {}
@@ -42,11 +66,27 @@ fn main() {
         return emit_error("REQUEST_VALIDATION_FAILED", &msg);
     }
 
-    let result = review_app::run_review(&request);
+    let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
+    let config = ReviewConfig {
+        model,
+        base_url,
+        api_key,
+        max_turns,
+        max_tool_calls: 10,
+        max_completion_attempts: 3,
+        wall_clock_budget: Some(Duration::from_secs(wall_clock_budget_secs)),
+    };
+    let result = review_app::run_review(&request, &config);
 
     cli_common::write_json_stdout(&result).expect("failed to write result");
 
-    std::process::exit(cli_common::ExitCode::Indeterminate as i32);
+    let exit = match result.status {
+        ReviewStatus::Approved => cli_common::ExitCode::Approved,
+        ReviewStatus::ChangesRequested => cli_common::ExitCode::ChangesRequested,
+        ReviewStatus::Indeterminate => cli_common::ExitCode::Indeterminate,
+    };
+
+    std::process::exit(exit as i32);
 }
 
 fn emit_error(code: &str, message: &str) {

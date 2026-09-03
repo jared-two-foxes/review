@@ -1,18 +1,33 @@
 {
-  "$schema": "http://json-schema.org/draft/2020-12/schema",
-  "additionalProperties": false,
+  "$schema":
+ "http://json-schema.org/draft/2020-12/schema",
+
+ "additionalProperties": false,
   "properties": {
-    "repository_path": {
+
+ "base_ref": {
       "type": "string"
     },
+    "head_ref":
+ {
+      "type": "string"
+    },
+    "repository_path": {
+
+ "type": "string"
+    },
     "schema": {
-      "type": "string",
+      "type":
+ "string",
       "const": "review.request/v1"
     }
   },
-  "required": [
-    "schema", "repository_path"
+
+ "required": [
+    "schema", "repository_path", "base_ref",
+ "head_ref"
   ],
   "title": "Review Request",
-  "type": "object"
+  "type":
+ "object"
 }

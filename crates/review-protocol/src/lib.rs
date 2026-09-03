@@ -20,11 +20,13 @@ pub enum ReviewReason {
     ReviewCompleted,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewRequest {
     pub schema: String,
     pub repository_path: String,
+    pub base_ref: String,
+    pub head_ref: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -58,6 +60,12 @@ pub fn validate_request(request: &ReviewRequest) -> Result<(), String> {
             request.repository_path
         ));
     }
+    if request.base_ref.is_empty() {
+        return Err("base_ref must not be empty".into());
+    }
+    if request.head_ref.is_empty() {
+        return Err("head_ref must not be empty".into());
+    }
     Ok(())
 }
 
@@ -71,7 +79,16 @@ pub fn generate_schemas() -> Vec<(&'static str, String)> {
 }
 
 fn request_schema() -> String {
-    "{\n  \"$schema\": \"http://json-schema.org/draft/2020-12/schema\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"repository_path\": {\n      \"type\": \"string\"\n    },\n    \"schema\": {\n      \"type\": \"string\",\n      \"const\": \"review.request/v1\"\n    }\n  },\n  \"required\": [\n    \"schema\", \"repository_path\"\n  ],\n  \"title\": \"Review Request\",\n  \"type\": \"object\"\n}\n"
+    "{\n  \"$schema\":
+ \"http://json-schema.org/draft/2020-12/schema\",\n
+ \"additionalProperties\": false,\n  \"properties\": {\n
+ \"base_ref\": {\n      \"type\": \"string\"\n    },\n    \"head_ref\":
+ {\n      \"type\": \"string\"\n    },\n    \"repository_path\": {\n
+ \"type\": \"string\"\n    },\n    \"schema\": {\n      \"type\":
+ \"string\",\n      \"const\": \"review.request/v1\"\n    }\n  },\n
+ \"required\": [\n    \"schema\", \"repository_path\", \"base_ref\",
+ \"head_ref\"\n  ],\n  \"title\": \"Review Request\",\n  \"type\":
+ \"object\"\n}\n"
         .to_string()
 }
 

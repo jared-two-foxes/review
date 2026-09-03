@@ -392,6 +392,7 @@ mod coordinator_failure_tests {
             max_turns: 2,
             max_tool_calls: 2,
             max_completion_attempts: 2,
+            wall_clock_budget: None,
         };
         let coordinator = SessionCoordinator::new(
             App,

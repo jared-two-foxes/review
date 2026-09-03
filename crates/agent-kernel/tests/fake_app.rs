@@ -131,6 +131,7 @@ fn build_coordinator(
         max_turns: 10,
         max_tool_calls: 10,
         max_completion_attempts: 10,
+        wall_clock_budget: None,
     };
     let id_gen = SequenceIdGenerator::new(["ses-1", "exec-1", "exec-2", "exec-3"]);
     SessionCoordinator::new(EchoApp {}, provider, id_gen, catalog, limits)

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LedgerEvent {
@@ -35,4 +36,5 @@ pub struct Limits {
     pub max_turns: u32,
     pub max_tool_calls: u32,
     pub max_completion_attempts: u32,
+    pub wall_clock_budget: Option<Duration>,
 }
