@@ -1,1 +1,1 @@
-{"schema":"review.result/v1","status":"INDETERMINATE","reason":"REVIEW_ENGINE_NOT_AVAILABLE","review_id":"result-0001","completed_at":"2025-01-01T00:00:00Z"}
+{"schema":"review.result/v1","status":"INDETERMINATE","reason":"REVIEW_ENGINE_NOT_AVAILABLE","review_id":"result-0001","completed_at":"2025-01-01T00:00:00Z","findings":[],"usage":{"input_tokens":0,"output_tokens":0,"estimated_cost_usd":null}}

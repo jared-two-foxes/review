@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 use crate::ledger::{LedgerEvent, Limits};
+use crate::model::UsageRecord;
 
 pub struct ApplicationDescriptor {
     pub application_id: String,
@@ -61,5 +62,5 @@ pub trait AgentApplication {
         state: &Self::State,
         completion: &Self::Completion,
     ) -> CompletionDecision;
-    fn build_terminal_result(&self, state: &Self::State) -> Self::Result;
+    fn build_terminal_result(&self, state: &Self::State, usage: &UsageRecord) -> Self::Result;
 }

@@ -384,7 +384,7 @@ mod coordinator_failure_tests {
         fn validate_completion(&self, _: &State, _: &Completion) -> CompletionDecision {
             CompletionDecision::Accepted
         }
-        fn build_terminal_result(&self, _: &State) {}
+        fn build_terminal_result(&self, _: &State, _: &UsageRecord) {}
     }
 
     fn run_with_provider<P: ModelProvider>(provider: P) -> Vec<LedgerEvent> {

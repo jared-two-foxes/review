@@ -3,5 +3,11 @@
   "status": "APPROVED",
   "reason": "REVIEW_COMPLETED",
   "review_id": "rev-001",
-  "completed_at": "2025-01-01T00:00:00Z"
+  "completed_at": "2025-01-01T00:00:00Z",
+  "findings": [],
+  "usage": {
+    "input_tokens": 30,
+    "output_tokens": 12,
+    "estimated_cost_usd": 0.03
+  }
 }

@@ -4,6 +4,7 @@ use agent_kernel::coordinator::SessionCoordinator;
 use agent_kernel::ledger::{LedgerEvent, Limits};
 use agent_kernel::model::{
     CanonicalModelRequest, CanonicalModelResponse, ModelAction, ModelError, ModelProvider,
+    UsageRecord,
 };
 use agent_kernel::tools::ToolCatalog;
 use agent_protocol::{FixedClock, SequenceIdGenerator};
@@ -92,13 +93,9 @@ fn build_request() -> ReviewRequest {
 
 #[test]
 fn scenario_1_golden_match() {
-    // 1. Set up deterministic sources
     let clock = FixedClock::new("2025-01-01T00:00:00Z");
     let app_ids = SequenceIdGenerator::new(["rev-001"]);
     let coord_ids = SequenceIdGenerator::new(["ses-001", "exec-001"]);
-
-    // 2. Build scripted provider for scenario 1
-    //    (read_change → completion with no findings)
     let provider = ScriptedModelProvider::new(vec![
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
@@ -106,18 +103,24 @@ fn scenario_1_golden_match() {
                 tool: "get_change_summary".into(),
                 arguments: json!({}),
             }],
-            usage: None,
+            usage: Some(UsageRecord {
+                input_tokens: 10,
+                output_tokens: 4,
+                estimated_cost_usd: Some(0.01),
+            }),
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
                 action_id: "act-2".into(),
                 payload: json!({"findings": []}),
             }],
-            usage: None,
+            usage: Some(UsageRecord {
+                input_tokens: 20,
+                output_tokens: 8,
+                estimated_cost_usd: Some(0.02),
+            }),
         },
     ]);
-
-    // 3. Run through coordinator
     let (result, events) = SessionCoordinator::new(
         ReviewApplication::new_with_sources(clock, app_ids),
         provider,
@@ -126,7 +129,9 @@ fn scenario_1_golden_match() {
         build_limits(10),
     )
     .run_full(build_request());
-
+    assert_eq!(result.usage.input_tokens, 30);
+    assert_eq!(result.usage.output_tokens, 12);
+    assert_eq!(result.usage.estimated_cost_usd, Some(0.03));
     assert_golden(&events, &result, 1);
 }
 
@@ -135,17 +140,17 @@ fn scenario_2_golden_match() {
     let clock = FixedClock::new("2025-01-01T00:00:00Z");
     let app_ids = SequenceIdGenerator::new(["rev-001"]);
     let coord_ids = SequenceIdGenerator::new(["ses-001", "exec-001", "exec-002", "exec-003"]);
-
-    // Turn 1: model requests completion before reading → rejected
-    // Turn 2: model calls read_change → accepted
-    // Turn 3: model requests completion again → accepted → APPROVED
     let provider = ScriptedModelProvider::new(vec![
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
                 action_id: "act-1".into(),
                 payload: json!({"findings": []}),
             }],
-            usage: None,
+            usage: Some(UsageRecord {
+                input_tokens: 1,
+                output_tokens: 2,
+                estimated_cost_usd: Some(0.1),
+            }),
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
@@ -153,17 +158,24 @@ fn scenario_2_golden_match() {
                 tool: "get_change_summary".into(),
                 arguments: json!({}),
             }],
-            usage: None,
+            usage: Some(UsageRecord {
+                input_tokens: 3,
+                output_tokens: 4,
+                estimated_cost_usd: Some(0.2),
+            }),
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
                 action_id: "act-3".into(),
                 payload: json!({"findings": []}),
             }],
-            usage: None,
+            usage: Some(UsageRecord {
+                input_tokens: 5,
+                output_tokens: 6,
+                estimated_cost_usd: Some(0.3),
+            }),
         },
     ]);
-
     let (result, events) = SessionCoordinator::new(
         ReviewApplication::new_with_sources(clock, app_ids),
         provider,
@@ -172,7 +184,13 @@ fn scenario_2_golden_match() {
         build_limits(10),
     )
     .run_full(build_request());
-
+    assert_eq!(result.usage.input_tokens, 9);
+    assert_eq!(result.usage.output_tokens, 12);
+    let cost = result
+        .usage
+        .estimated_cost_usd
+        .expect("usage cost should be present");
+    assert!((cost - 0.6).abs() < f64::EPSILON * 4.0);
     assert_golden(&events, &result, 2);
 }
 
@@ -181,48 +199,18 @@ fn scenario_3_golden_match() {
     let clock = FixedClock::new("2025-01-01T00:00:00Z");
     let app_ids = SequenceIdGenerator::new(["rev-001"]);
     let coord_ids = SequenceIdGenerator::new(["ses-001", "exec-001"]);
-
-    // Turn 1: model calls a tool NOT in the catalog → action_rejected
-    // Turn 2: turn > max_turns(1) → exit → Indeterminate (completion never accepted)
     let provider = ScriptedModelProvider::new(vec![CanonicalModelResponse {
         actions: vec![ModelAction::ToolCall {
             action_id: "act-1".into(),
-            tool: "nonexistent_tool".into(), // ← not in catalog
+            tool: "nonexistent_tool".into(),
             arguments: json!({}),
         }],
-        usage: None,
+        usage: Some(UsageRecord {
+            input_tokens: 7,
+            output_tokens: 9,
+            estimated_cost_usd: Some(0.7),
+        }),
     }]);
-
-    let (result, events) = SessionCoordinator::new(
-        ReviewApplication::new_with_sources(clock, app_ids),
-        provider,
-        coord_ids,
-        build_catalog(),
-        build_limits(1), // ← exit after 1 turn
-    )
-    .run_full(build_request());
-
-    assert_golden(&events, &result, 3);
-}
-
-#[test]
-fn scenario_4_golden_match() {
-    let clock = FixedClock::new("2025-01-01T00:00:00Z");
-    let app_ids = SequenceIdGenerator::new(["rev-001"]);
-    let coord_ids = SequenceIdGenerator::new(["ses-001", "exec-001"]);
-
-    // Turn 1: model calls read_change with wrong argument type → validate_arguments
-    //         fails → action_rejected (execute is NOT called)
-    // Turn 2: turn > max_turns(1) → exit → Indeterminate
-    let provider = ScriptedModelProvider::new(vec![CanonicalModelResponse {
-        actions: vec![ModelAction::ToolCall {
-            action_id: "act-1".into(),
-            tool: "get_change_summary".into(), // ← tool EXISTS in catalog
-            arguments: json!("not-an-object"), // ← but args fail schema validation
-        }],
-        usage: None,
-    }]);
-
     let (result, events) = SessionCoordinator::new(
         ReviewApplication::new_with_sources(clock, app_ids),
         provider,
@@ -231,6 +219,39 @@ fn scenario_4_golden_match() {
         build_limits(1),
     )
     .run_full(build_request());
+    assert_eq!(result.usage.input_tokens, 7);
+    assert_eq!(result.usage.output_tokens, 9);
+    assert_eq!(result.usage.estimated_cost_usd, Some(0.7));
+    assert_golden(&events, &result, 3);
+}
 
+#[test]
+fn scenario_4_golden_match() {
+    let clock = FixedClock::new("2025-01-01T00:00:00Z");
+    let app_ids = SequenceIdGenerator::new(["rev-001"]);
+    let coord_ids = SequenceIdGenerator::new(["ses-001", "exec-001"]);
+    let provider = ScriptedModelProvider::new(vec![CanonicalModelResponse {
+        actions: vec![ModelAction::ToolCall {
+            action_id: "act-1".into(),
+            tool: "get_change_summary".into(),
+            arguments: json!("not-an-object"),
+        }],
+        usage: Some(UsageRecord {
+            input_tokens: 11,
+            output_tokens: 13,
+            estimated_cost_usd: Some(0.11),
+        }),
+    }]);
+    let (result, events) = SessionCoordinator::new(
+        ReviewApplication::new_with_sources(clock, app_ids),
+        provider,
+        coord_ids,
+        build_catalog(),
+        build_limits(1),
+    )
+    .run_full(build_request());
+    assert_eq!(result.usage.input_tokens, 11);
+    assert_eq!(result.usage.output_tokens, 13);
+    assert_eq!(result.usage.estimated_cost_usd, Some(0.11));
     assert_golden(&events, &result, 4);
 }

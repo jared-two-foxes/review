@@ -3,5 +3,11 @@
   "status": "INDETERMINATE",
   "reason": "REVIEW_ENGINE_NOT_AVAILABLE",
   "review_id": "rev-001",
-  "completed_at": "2025-01-01T00:00:00Z"
+  "completed_at": "2025-01-01T00:00:00Z",
+  "findings": [],
+  "usage": {
+    "input_tokens": 7,
+    "output_tokens": 9,
+    "estimated_cost_usd": 0.7
+  }
 }

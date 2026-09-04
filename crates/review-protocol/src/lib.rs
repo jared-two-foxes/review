@@ -29,6 +29,23 @@ pub struct ReviewRequest {
     pub head_ref: String,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct FindingOutput {
+    pub blocking: bool,
+    pub message: String,
+    pub severity: String,
+    pub path: Option<String>,
+    pub line: Option<u64>,
+    pub recommendation: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+pub struct UsageSummary {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub estimated_cost_usd: Option<f64>,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewResult {
@@ -37,6 +54,8 @@ pub struct ReviewResult {
     pub reason: ReviewReason,
     pub review_id: String,
     pub completed_at: String,
+    pub findings: Vec<FindingOutput>,
+    pub usage: UsageSummary,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -70,31 +89,73 @@ pub fn validate_request(request: &ReviewRequest) -> Result<(), String> {
 }
 
 pub fn generate_schemas() -> Vec<(&'static str, String)> {
-    let schemas = vec![
+    vec![
         ("review.request.v1.json", request_schema()),
         ("review.result.v1.json", review_schema()),
         ("agent.error.v1.json", error_schema()),
-    ];
-    schemas
+    ]
 }
 
 fn request_schema() -> String {
-    "{\n  \"$schema\":
- \"http://json-schema.org/draft/2020-12/schema\",\n
- \"additionalProperties\": false,\n  \"properties\": {\n
- \"base_ref\": {\n      \"type\": \"string\"\n    },\n    \"head_ref\":
- {\n      \"type\": \"string\"\n    },\n    \"repository_path\": {\n
- \"type\": \"string\"\n    },\n    \"schema\": {\n      \"type\":
- \"string\",\n      \"const\": \"review.request/v1\"\n    }\n  },\n
- \"required\": [\n    \"schema\", \"repository_path\", \"base_ref\",
- \"head_ref\"\n  ],\n  \"title\": \"Review Request\",\n  \"type\":
- \"object\"\n}\n"
-        .to_string()
+    "{\n  \"$schema\": \"http://json-schema.org/draft/2020-12/schema\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"base_ref\": {\n      \"type\": \"string\"\n    },\n    \"head_ref\": {\n      \"type\": \"string\"\n    },\n    \"repository_path\": {\n      \"type\": \"string\"\n    },\n    \"schema\": {\n      \"type\": \"string\",\n      \"const\": \"review.request/v1\"\n    }\n  },\n  \"required\": [\n    \"schema\", \"repository_path\", \"base_ref\", \"head_ref\"\n  ],\n  \"title\": \"Review Request\",\n  \"type\": \"object\"\n}\n".to_string()
 }
 
 fn review_schema() -> String {
-    "{\n  \"$schema\": \"http://json-schema.org/draft/2020-12/schema\",\n  \"title\": \"Review Result\",\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"required\": [\"schema\", \"status\", \"reason\", \"review_id\", \"completed_at\"],\n  \"properties\": {\n    \"schema\": {\n      \"type\": \"string\",\n      \"const\": \"review.result/v1\"\n    },\n    \"status\": {\n      \"type\": \"string\",\n      \"enum\": [\"APPROVED\", \"CHANGES_REQUESTED\", \"INDETERMINATE\"]\n    },\n    \"reason\": {\n      \"type\": \"string\",\n      \"enum\": [\"REVIEW_ENGINE_NOT_AVAILABLE\"]\n    },\n    \"review_id\": {\n      \"type\": \"string\"\n    },\n    \"completed_at\": {\n      \"type\": \"string\"\n    }\n  }\n}\n"
-        .to_string()
+    r#"{
+  "$schema": "http://json-schema.org/draft/2020-12/schema",
+  "title": "Review Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "reason", "review_id", "completed_at", "findings", "usage"],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "review.result/v1"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["APPROVED", "CHANGES_REQUESTED", "INDETERMINATE"]
+    },
+    "reason": {
+      "type": "string",
+      "enum": ["REVIEW_ENGINE_NOT_AVAILABLE", "REVIEW_COMPLETED"]
+    },
+    "review_id": {
+      "type": "string"
+    },
+    "completed_at": {
+      "type": "string"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["blocking", "message", "severity"],
+        "properties": {
+          "blocking": { "type": "boolean" },
+          "message": { "type": "string" },
+          "severity": { "type": "string" },
+          "path": { "type": ["string", "null"] },
+          "line": { "type": ["integer", "null"] },
+          "recommendation": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_tokens", "output_tokens"],
+      "properties": {
+        "input_tokens": { "type": "integer" },
+        "output_tokens": { "type": "integer" },
+        "estimated_cost_usd": { "type": ["number", "null"] }
+      }
+    }
+  }
+}
+"#
+    .to_string()
 }
 
 fn error_schema() -> String {

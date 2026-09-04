@@ -8,7 +8,7 @@ use agent_kernel::coordinator::SessionCoordinator;
 use agent_kernel::tools::ToolCatalog;
 use agent_kernel::{
     ledger::{LedgerEvent, Limits},
-    model::ToolDescription,
+    model::{ToolDescription, UsageRecord},
     tools::{Tool, ToolResult, ToolStatus},
 };
 use agent_protocol::{Clock, IdGenerator, RandomIdGenerator, SystemClock};
@@ -18,7 +18,7 @@ use code_agent_runtime::tools::{
     SearchTextTool,
 };
 use code_agent_runtime::{repo::GitRepo, security::SecurityPolicy};
-use review_protocol::{ReviewReason, ReviewRequest, ReviewResult, ReviewStatus};
+use review_protocol::{ReviewReason, ReviewRequest, ReviewResult, ReviewStatus, UsageSummary};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::cell::RefCell;
@@ -62,6 +62,8 @@ pub fn run_review(
                 reason: ReviewReason::ReviewEngineNotAvailable,
                 review_id: String::new(),
                 completed_at: String::new(),
+                findings: vec![],
+                usage: UsageSummary::default(),
             },
             vec![],
             Some(reason),
@@ -158,6 +160,8 @@ pub fn run_review_with_sources<C: Clock, I: IdGenerator>(
         reason: ReviewReason::ReviewEngineNotAvailable,
         review_id: ids.next_id(),
         completed_at: clock.now(),
+        findings: vec![],
+        usage: UsageSummary::default(),
     };
     serde_json::to_vec(&result).expect("review result is serializable")
 }
@@ -177,6 +181,11 @@ pub struct ReviewCompletion {
 pub struct Finding {
     pub blocking: bool,
     pub message: String,
+    pub path: Option<String>,
+    pub line: Option<u32>,
+    #[serde(default)]
+    pub severity: String,
+    pub recommendation: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -191,12 +200,6 @@ pub struct ReviewApplication {
 }
 
 impl ReviewApplication {
-    // pub fn new() -> Self {
-    //     ReviewApplication {
-    //         pending_completion: RefCell::new(None),
-    //     }
-    // }
-
     pub fn new_with_sources<C: Clock + 'static, I: IdGenerator + 'static>(
         clock: C,
         id_gen: I,
@@ -252,16 +255,14 @@ impl AgentApplication for ReviewApplication {
 
     fn build_system_instructions(&self, _state: &Self::State) -> Vec<InstructionBlock> {
         vec![InstructionBlock {
-            content: "You are a code reviewer. Inspect the change by calling get_change_summary, then read_diff, read_file, list_directory, or search_text as needed to understand it.  WHen you have enough information, issue a completion with a JSON payload of the format {\"findings\": [{\"blocking\": <bool>, \"message\":\"<<string>\"}]}.  A blocking finding means the change must not be approved.  If you find no issues, complete with an empty findings array.".into(),
+            content: "You are a code reviewer. Inspect the change by calling get_change_summary, then read_diff, read_file, list_directory, or search_text as needed to understand it. When you have enough information, issue a completion with a JSON payload of the form {\"findings\": [{\"blocking\": <bool>, \"message\": \"<string>\", \"path\": <optional file path or null>, \"line\": <optional line number or null>, \"severity\": \"<high|medium|low>\", \"recommendation\": <optional suggested fix or null>}]}. Severity is required for every finding; path, line, and recommendation should be included when applicable. Report every actionable issue you identify as a finding rather than omitting it. The findings array must contain at least one concrete finding from the inspected change. A blocking finding means the change must not be approved.".into(),
         }]
     }
 
     fn build_context(&self, _state: &Self::State) -> Vec<ContextBlock> {
-        vec![
-            ContextBlock {
-                content: "Review the code change in this repository. Begin by calling get_change_summary to inspect the change, then call read_diff, read_file, list_directory, or search_text as needed. When you have enough information, issue a completion with your findings as a JSON object of the form {\"findings\":[{\"blocking\": <bool>, \"message\": \"<string>\"}]}.".into()
-            }
-        ]
+        vec![ContextBlock {
+            content: "Review the code change in this repository. Begin by calling get_change_summary to inspect the change, then call read_diff, read_file, list_directory, or search_text as needed. When you have enough information, issue a completion with your findings as a JSON object of the form {\"findings\":[{\"blocking\": <bool>, \"message\": \"<string>\", \"path\": <optional or null>, \"line\": <optional or null>, \"severity\": \"<high|medium|low>\", \"recommendation\": <optional or null>}]}. Include the required severity field on every finding, include path, line, and recommendation when applicable, and include every actionable issue you found. Do not return an empty findings array; identify the most relevant concrete observation from the inspected change.".into(),
+        }]
     }
 
     fn validate_request(&self, request: &Self::Request) -> Result<(), Self::Error> {
@@ -303,7 +304,7 @@ impl AgentApplication for ReviewApplication {
             .map_err(|e| ReviewError(format!("invalid completion payload: {}", e)))
     }
 
-    fn build_terminal_result(&self, _state: &Self::State) -> Self::Result {
+    fn build_terminal_result(&self, _state: &Self::State, usage: &UsageRecord) -> Self::Result {
         let accepted = *self.completion_accepted.borrow();
         let pending = self.pending_completion.borrow();
         let empty_binding = vec![];
@@ -330,6 +331,22 @@ impl AgentApplication for ReviewApplication {
             },
             review_id: self.id_gen.borrow_mut().next_id(),
             completed_at: self.clock.borrow().now(),
+            findings: findings
+                .iter()
+                .map(|finding| review_protocol::FindingOutput {
+                    blocking: finding.blocking,
+                    message: finding.message.clone(),
+                    severity: finding.severity.clone(),
+                    path: finding.path.clone(),
+                    line: finding.line.map(u64::from),
+                    recommendation: finding.recommendation.clone(),
+                })
+                .collect(),
+            usage: UsageSummary {
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                estimated_cost_usd: usage.estimated_cost_usd,
+            },
         }
     }
 }

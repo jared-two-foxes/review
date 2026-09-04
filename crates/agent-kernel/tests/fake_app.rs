@@ -3,7 +3,7 @@ use agent_kernel::coordinator::SessionCoordinator;
 use agent_kernel::ledger::{LedgerEvent, Limits};
 use agent_kernel::model::{
     CanonicalModelRequest, CanonicalModelResponse, ModelAction, ModelError, ModelProvider,
-    ToolDescription,
+    ToolDescription, UsageRecord,
 };
 use agent_kernel::tools::{Tool, ToolCatalog, ToolResult, ToolStatus};
 use agent_protocol::SequenceIdGenerator;
@@ -256,7 +256,7 @@ impl AgentApplication for EchoApp {
         }
     }
 
-    fn build_terminal_result(&self, state: &EchoState) -> Self::Result {
+    fn build_terminal_result(&self, state: &EchoState, _usage: &UsageRecord) -> Self::Result {
         EchoResult {
             tool_calls: state.tool_calls,
         }

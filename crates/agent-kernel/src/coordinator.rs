@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use crate::application::{AgentApplication, CompletionDecision, ContextBlock};
 use crate::ledger::{InMemoryLedger, LedgerEvent, Limits};
-use crate::model::{CanonicalModelRequest, ModelAction, ModelProvider};
+use crate::model::{CanonicalModelRequest, ModelAction, ModelProvider, UsageRecord};
 use crate::tools::ToolCatalog;
 
 pub struct SessionCoordinator<A, P, I> {
@@ -65,13 +65,18 @@ where
             .map(|budget| Instant::now() + budget);
 
         let mut tool_result_contents: Vec<String> = Vec::new();
+        let mut usage = UsageRecord {
+            input_tokens: 0,
+            output_tokens: 0,
+            estimated_cost_usd: None,
+        };
 
         // Main Loop
         loop {
             turn += 1;
             if turn > self.limits.max_turns {
                 return (
-                    self.app.build_terminal_result(&state),
+                    self.app.build_terminal_result(&state, &usage),
                     self.ledger.events().to_vec(),
                 );
             }
@@ -103,11 +108,22 @@ where
                     self.append_event(&session_id, turn, "", "kernel.model_failed");
                     self.append_event(&session_id, turn, "", "kernel.session_indeterminate");
                     return (
-                        self.app.build_terminal_result(&state),
+                        self.app.build_terminal_result(&state, &usage),
                         self.ledger.events().to_vec(),
                     );
                 }
             };
+
+            if let Some(record) = response.usage() {
+                usage.input_tokens += record.input_tokens;
+                usage.output_tokens += record.output_tokens;
+                usage.estimated_cost_usd =
+                    match (usage.estimated_cost_usd, record.estimated_cost_usd) {
+                        (Some(total), Some(cost)) => Some(total + cost),
+                        (None, cost) => cost,
+                        (total, None) => total,
+                    };
+            }
 
             self.append_event(&session_id, turn, "", "kernel.model_completed");
 
@@ -122,7 +138,7 @@ where
                         tool_call_count += 1;
                         if tool_call_count > self.limits.max_tool_calls {
                             return (
-                                self.app.build_terminal_result(&state),
+                                self.app.build_terminal_result(&state, &usage),
                                 self.ledger.events().to_vec(),
                             );
                         }
@@ -175,7 +191,7 @@ where
                         completion_attempt_count += 1;
                         if completion_attempt_count > self.limits.max_completion_attempts {
                             return (
-                                self.app.build_terminal_result(&state),
+                                self.app.build_terminal_result(&state, &usage),
                                 self.ledger.events().to_vec(),
                             );
                         }
@@ -202,7 +218,7 @@ where
                                     "kernel.completion_accepted",
                                 );
                                 return (
-                                    self.app.build_terminal_result(&state),
+                                    self.app.build_terminal_result(&state, &usage),
                                     self.ledger.events().to_vec(),
                                 );
                             }
@@ -234,14 +250,14 @@ where
                                     "kernel.completion_rejected",
                                 );
                                 return (
-                                    self.app.build_terminal_result(&state),
+                                    self.app.build_terminal_result(&state, &usage),
                                     self.ledger.events().to_vec(),
                                 );
                             }
                             CompletionDecision::Paused => {
                                 // V1: Not supported, end session
                                 return (
-                                    self.app.build_terminal_result(&state),
+                                    self.app.build_terminal_result(&state, &usage),
                                     self.ledger.events().to_vec(),
                                 );
                             }
