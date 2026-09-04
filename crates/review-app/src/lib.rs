@@ -241,7 +241,9 @@ impl AgentApplication for ReviewApplication {
     }
 
     fn build_system_instructions(&self, _state: &Self::State) -> Vec<InstructionBlock> {
-        vec![]
+        vec![InstructionBlock {
+            content: "You are a code reviewer. Inspect the change by calling get_change_summary, then read_diff, read_file, list_directory, or search_text as needed to understand it.  WHen you have enough information, issue a completion with a JSON payload of the format {\"findings\": [{\"blocking\": <bool>, \"message\":\"<<string>\"}]}.  A blocking finding means the change must not be approved.  If you find no issues, complete with an empty findings array.".into(),
+        }]
     }
 
     fn build_context(&self, _state: &Self::State) -> Vec<ContextBlock> {

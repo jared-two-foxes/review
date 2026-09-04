@@ -1,0 +1,6 @@
+{
+  "schema": "review.request/v1",
+  "repository_path": "C:/Users/iapet/code/own/review",
+  "base_ref": "HEAD~1",
+  "head_ref": "HEAD"
+}

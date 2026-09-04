@@ -7,13 +7,43 @@ use agent_kernel::model::{
 };
 use agent_kernel::tools::{Tool, ToolCatalog, ToolResult, ToolStatus};
 use agent_protocol::SequenceIdGenerator;
-use serde_json::Value;
+use serde_json::{json, Value};
+use std::cell::RefCell;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::rc::Rc;
 use std::time::Instant;
 
 struct ScriptedModelProvider {
     responses: Vec<CanonicalModelResponse>,
     index: usize,
+}
+
+struct RecordingProvider {
+    responses: Vec<CanonicalModelResponse>,
+    index: usize,
+    captured_contexts: Rc<RefCell<Vec<Vec<String>>>>,
+}
+
+impl ModelProvider for RecordingProvider {
+    fn generate(
+        &mut self,
+        request: &CanonicalModelRequest,
+    ) -> Result<CanonicalModelResponse, ModelError> {
+        self.captured_contexts
+            .borrow_mut()
+            .push(request.context.iter().map(|c| c.content.clone()).collect());
+        let response = self.responses[self.index].clone();
+        self.index += 1;
+        Ok(response)
+    }
+
+    fn generate_with_deadline(
+        &mut self,
+        request: &CanonicalModelRequest,
+        deadline: Instant,
+    ) -> Result<CanonicalModelResponse, ModelError> {
+        self.generate(request)
+    }
 }
 
 impl ScriptedModelProvider {
@@ -416,5 +446,105 @@ fn model_generation_failure_ends_indeterminate_without_approval() {
     assert_eq!(
         handled_failures, 4,
         "network, timeout, API, and rate-limit failures must all be handled by the coordinator"
+    );
+}
+
+#[test]
+fn tool_result_is_fed_back_into_next_model_request() {
+    let captured: Rc<RefCell<Vec<Vec<String>>>> = Rc::new(RefCell::new(vec![]));
+    let provider = RecordingProvider {
+        responses: vec![
+            CanonicalModelResponse {
+                actions: vec![ModelAction::ToolCall {
+                    action_id: "act-1".into(),
+                    tool: "echo".into(),
+                    arguments: json!({"marker": "tool-output-marker"}),
+                }],
+                usage: None,
+            },
+            CanonicalModelResponse {
+                actions: vec![ModelAction::CompletionRequest {
+                    action_id: "act-2".into(),
+                    payload: json!({}),
+                }],
+                usage: None,
+            },
+        ],
+        index: 0,
+        captured_contexts: Rc::clone(&captured),
+    };
+    let coordinator = build_coordinator(provider);
+    let _ = coordinator.run(EchoRequest);
+
+    let captured = captured.borrow();
+    assert!(
+        captured.len() >= 2,
+        "expected at least 2 model calls, got {}",
+        captured.len()
+    );
+    let turn2_context = &captured[1];
+    assert!(
+        turn2_context
+            .iter()
+            .any(|c| c.contains("tool-output-marker")),
+        "turn-2 model request context must contain the turn-1 tool result content: {:?}",
+        turn2_context
+    );
+}
+
+#[test]
+fn rejection_and_richer_feedback_are_fed_back_into_next_model_request() {
+    let captured: Rc<RefCell<Vec<Vec<String>>>> = Rc::new(RefCell::new(vec![]));
+    let provider = RecordingProvider {
+        responses: vec![
+            CanonicalModelResponse {
+                actions: vec![ModelAction::ToolCall {
+                    action_id: "act-1".into(),
+                    tool: "echo".into(),
+                    arguments: json!({"marker": "ok"}),
+                }],
+                usage: None,
+            },
+            CanonicalModelResponse {
+                actions: vec![ModelAction::ToolCall {
+                    action_id: "act-2".into(),
+                    tool: "nonexistent".into(),
+                    arguments: json!({}),
+                }],
+                usage: None,
+            },
+            CanonicalModelResponse {
+                actions: vec![ModelAction::CompletionRequest {
+                    action_id: "act-3".into(),
+                    payload: json!({}),
+                }],
+                usage: None,
+            },
+        ],
+        index: 0,
+        captured_contexts: Rc::clone(&captured),
+    };
+    let coordinator = build_coordinator(provider);
+    let _ = coordinator.run(EchoRequest);
+
+    let captured = captured.borrow();
+    assert!(
+        captured.len() >= 3,
+        "expected at least 3 model calls, got {}",
+        captured.len()
+    );
+    let turn2 = &captured[1];
+    assert!(
+        turn2
+            .iter()
+            .any(|c| c.contains("act-1") && c.contains("Succeeded")),
+        "turn-2 context must contain richer successful tool feedback (action id + status): {:?}",
+        turn2
+    );
+    let turn3 = &captured[2];
+    assert!(
+        turn3.iter().any(|c| c.contains("no such tool")),
+        "turn-3 context must contain corrective feedback for the rejected tool call: {:?}",
+        turn3
     );
 }

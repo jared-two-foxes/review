@@ -1,4 +1,5 @@
 use agent_kernel::{
+    application::AgentApplication,
     coordinator::SessionCoordinator,
     ledger::Limits,
     model::{
@@ -200,5 +201,31 @@ fn review_application_constructible_with_production_clock_and_id_generator() {
     assert!(
         !result.completed_at.is_empty(),
         "completed_at must be populated by the production clock"
+    );
+}
+
+#[test]
+fn build_system_instructions_returns_review_policy_naming_tool_and_completion() {
+    let app = ReviewApplication::new_with_sources(
+        FixedClock::new("2025-01-01T00:00:00Z"),
+        SequenceIdGenerator::new(["rev-001"]),
+    );
+    let request = ReviewRequest {
+        schema: "review.request/v1".into(),
+        repository_path: ".".into(),
+        base_ref: "HEAD~1".into(),
+        head_ref: "HEAD".into(),
+    };
+    let init = app.initialize(&request).expect("initialize");
+    let instructions = app.build_system_instructions(&init.initial_state);
+    assert!(!instructions.is_empty(), "review policy must be non-empty");
+    let content = &instructions[0].content;
+    assert!(
+        content.contains("get_change_summary"),
+        "policy must direct the model to inspect the change: {content}"
+    );
+    assert!(
+        content.contains("completion"),
+        "policy must direct the model to issue a completion: {content}"
     );
 }

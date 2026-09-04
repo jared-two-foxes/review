@@ -609,3 +609,149 @@ mod coordinator_failure_tests {
         );
     }
 }
+
+#[test]
+fn openai_provider_parses_object_shaped_tool_call_arguments() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind object-args provider");
+    let address = listener.local_addr().expect("object-args provider address");
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept object-args provider");
+        let mut request = [0_u8; 4096];
+        let _ = stream.read(&mut request);
+        // Ollama shape: arguments is a JSON object, not a string.
+        let response = r#"{"id":"r","model":"test-model","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"echo","arguments":{"value":"returned-by-provider"}}}]}}]}"#;
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response.len(),
+            response
+        );
+        stream
+            .write_all(reply.as_bytes())
+            .expect("send object-args response");
+    });
+
+    let request = CanonicalModelRequest {
+        instructions: vec![],
+        context: vec![],
+        tools: vec![],
+    };
+    let mut provider = OpenAiProvider::new(
+        format!("http://{address}/v1/chat/completions"),
+        "test-api-key",
+        "test-model",
+    );
+    let response = provider
+        .generate(&request)
+        .expect("generate should succeed");
+    server.join().expect("object-args server thread");
+
+    assert_eq!(response.actions.len(), 1);
+    match &response.actions[0] {
+        ModelAction::ToolCall {
+            action_id,
+            tool,
+            arguments,
+        } => {
+            assert_eq!(action_id, "c1");
+            assert_eq!(tool, "echo");
+            assert_eq!(
+                arguments,
+                &serde_json::json!({"value": "returned-by-provider"})
+            );
+        }
+        other => panic!("expected a tool call, got {other:?}"),
+    }
+}
+
+#[test]
+fn openai_provider_rejects_non_object_string_tool_arguments() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind non-object-args provider");
+    let address = listener
+        .local_addr()
+        .expect("non-object-args provider address");
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept non-object-args provider");
+        let mut request = [0_u8; 4096];
+        let _ = stream.read(&mut request);
+        // arguments is a JSON string that parses to a number, not an object.
+        let response = r#"{"id":"r","model":"test-model","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"echo","arguments":"123"}}]}}]}"#;
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response.len(),
+            response
+        );
+        stream
+            .write_all(reply.as_bytes())
+            .expect("send non-object-args response");
+    });
+
+    let request = CanonicalModelRequest {
+        instructions: vec![],
+        context: vec![],
+        tools: vec![],
+    };
+    let mut provider = OpenAiProvider::new(
+        format!("http://{address}/v1/chat/completions"),
+        "test-api-key",
+        "test-model",
+    );
+    let response = provider
+        .generate(&request)
+        .expect("generate should succeed");
+    server.join().expect("non-object-args server thread");
+
+    assert_eq!(
+        response.actions.len(),
+        0,
+        "a non-object string argument must be rejected (tool call dropped)"
+    );
+}
+
+#[test]
+fn openai_provider_parses_content_completion_into_completion_request() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind content-completion provider");
+    let address = listener
+        .local_addr()
+        .expect("content-completion provider address");
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener
+            .accept()
+            .expect("accept content-completion provider");
+        let mut request = [0_u8; 4096];
+        let _ = stream.read(&mut request);
+        // No tool_calls; the model's findings arrive as message content (a JSON object).
+        let response = r#"{"id":"r","model":"test-model","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"{\"findings\":[]}"}}]}"#;
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length:{}\r\nConnection: close\r\n\r\n{}",
+            response.len(),
+            response
+        );
+        stream
+            .write_all(reply.as_bytes())
+            .expect("send content-completion response");
+    });
+
+    let request = CanonicalModelRequest {
+        instructions: vec![],
+        context: vec![],
+        tools: vec![],
+    };
+    let mut provider = OpenAiProvider::new(
+        format!("http://{address}/v1/chat/completions"),
+        "test-api-key",
+        "test-model",
+    );
+    let response = provider
+        .generate(&request)
+        .expect("generate should succeed");
+    server.join().expect("content-completion server thread");
+
+    assert_eq!(response.actions.len(), 1);
+    match &response.actions[0] {
+        ModelAction::CompletionRequest { action_id, payload } => {
+            assert_eq!(action_id, "completion");
+            assert_eq!(payload, &serde_json::json!({"findings": []}));
+        }
+        other => panic!("expected a completion request, got {other:?}"),
+    }
+}

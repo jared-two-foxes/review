@@ -1,7 +1,7 @@
 use agent_protocol::IdGenerator;
 use std::time::Instant;
 
-use crate::application::{AgentApplication, CompletionDecision};
+use crate::application::{AgentApplication, CompletionDecision, ContextBlock};
 use crate::ledger::{InMemoryLedger, LedgerEvent, Limits};
 use crate::model::{CanonicalModelRequest, ModelAction, ModelProvider};
 use crate::tools::ToolCatalog;
@@ -64,6 +64,8 @@ where
             .wall_clock_budget
             .map(|budget| Instant::now() + budget);
 
+        let mut tool_result_contents: Vec<String> = Vec::new();
+
         // Main Loop
         loop {
             turn += 1;
@@ -76,7 +78,10 @@ where
 
             // Build model request from app state + available tools.
             let instructions = self.app.build_system_instructions(&state);
-            let context = self.app.build_context(&state);
+            let mut context = self.app.build_context(&state);
+            context.extend(tool_result_contents.iter().map(|content| ContextBlock {
+                content: content.clone(),
+            }));
             let model_request = CanonicalModelRequest {
                 instructions,
                 context,
@@ -125,6 +130,7 @@ where
                         let tool_impl = match self.catalog.get(&tool) {
                             Some(t) => t,
                             None => {
+                                tool_result_contents.push(format!("Tool call {} for \"{}\" was rejected: no such tool is available.", action_id, tool));
                                 self.append_event(
                                     &session_id,
                                     turn,
@@ -135,7 +141,11 @@ where
                             }
                         };
 
-                        if let Err(_msg) = tool_impl.validate_arguments(&arguments) {
+                        if let Err(msg) = tool_impl.validate_arguments(&arguments) {
+                            tool_result_contents.push(format!(
+                                "Tool call {} for \"{}\" was rejected: invalid arguments: {}",
+                                action_id, tool, msg
+                            ));
                             self.append_event(
                                 &session_id,
                                 turn,
@@ -146,7 +156,11 @@ where
                             continue;
                         }
 
-                        let _result = tool_impl.execute(&arguments);
+                        let result = tool_impl.execute(&arguments);
+                        tool_result_contents.push(format!(
+                            "Tool {} (action {}) {:?}: {}",
+                            tool, action_id, result.status, result.value
+                        ));
 
                         let event = self.append_event(
                             &session_id,
@@ -192,7 +206,15 @@ where
                                     self.ledger.events().to_vec(),
                                 );
                             }
-                            CompletionDecision::RejectedRemediable { .. } => {
+                            CompletionDecision::RejectedRemediable {
+                                feedback_for_model, ..
+                            } => {
+                                for block in &feedback_for_model {
+                                    tool_result_contents.push(format!(
+                                        "Completion rejected. Feedback: {}",
+                                        block.content
+                                    ));
+                                }
                                 self.append_event(
                                     &session_id,
                                     turn,

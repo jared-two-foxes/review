@@ -113,17 +113,23 @@ impl OpenAiProvider {
             .json()
             .map_err(|e| ModelError::ApiError(e.to_string()))?;
 
-        let actions = response["choices"]
-            .get(0)
-            .and_then(|choice| choice["message"]["tool_calls"].as_array())
-            .map(|calls| {
+        let choice = response["choices"].get(0);
+        let actions: Vec<ModelAction> =
+            if let Some(calls) = choice.and_then(|c| c["message"]["tool_calls"].as_array()) {
                 calls
                     .iter()
                     .filter_map(|call| {
                         let id = call["id"].as_str()?;
                         let name = call["function"]["name"].as_str()?;
-                        let args_str = call["function"]["arguments"].as_str()?;
-                        let args: Value = serde_json::from_str(args_str).ok()?;
+                        let args: Value = match call["function"]["arguments"].clone() {
+                            Value::String(s) if s.is_empty() => json!({}),
+                            Value::String(s) => match serde_json::from_str(&s) {
+                                Ok(parsed @ Value::Object(_)) => parsed,
+                                _ => return None,
+                            },
+                            obj @ Value::Object(_) => obj,
+                            _ => return None,
+                        };
                         Some(ModelAction::ToolCall {
                             action_id: id.to_string(),
                             tool: name.to_string(),
@@ -131,8 +137,20 @@ impl OpenAiProvider {
                         })
                     })
                     .collect()
-            })
-            .unwrap_or_default();
+            } else if let Some(content) = choice.and_then(|c| c["message"]["content"].as_str()) {
+                // A live model returns its findings as message content (a JSON object).
+                // Convert that into a completion request so the kernel can validate it.
+                if let Ok(payload @ Value::Object(_)) = serde_json::from_str::<Value>(content) {
+                    vec![ModelAction::CompletionRequest {
+                        action_id: "completion".into(),
+                        payload,
+                    }]
+                } else {
+                    vec![]
+                }
+            } else {
+                vec![]
+            };
 
         let usage = Self::normalize_usage(&response);
         Ok(CanonicalModelResponse {
