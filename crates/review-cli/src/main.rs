@@ -11,6 +11,7 @@ fn main() {
     let mut base_url: String = "https://api.openai.com/v1/chat/completions".into();
     let mut max_turns: u32 = 10;
     let mut wall_clock_budget_secs: u64 = 60;
+    let mut emit_events = false;
 
     let mut i = 1; // Skip program name
     while i < args.len() {
@@ -38,6 +39,10 @@ fn main() {
             }
             "--wall-clock-budget-secs" => {
                 wall_clock_budget_secs = args[i + 1].parse().unwrap_or(60);
+                i += 1;
+            }
+            "--emit-events" => {
+                emit_events = true;
                 i += 1;
             }
             _ => {}
@@ -72,14 +77,24 @@ fn main() {
         base_url,
         api_key,
         max_turns,
-        max_tool_calls: 10,
+        max_tool_calls: 40,
         max_completion_attempts: 3,
         wall_clock_budget: Some(Duration::from_secs(wall_clock_budget_secs)),
     };
-    let result = review_app::run_review(&request, &config);
+    let (result, events, setup_err) = review_app::run_review(&request, &config);
 
     cli_common::write_json_stdout(&result).expect("failed to write result");
 
+    if emit_events {
+        if let Some(reason) = setup_err {
+            eprintln!("review setup failed: {}", reason);
+        } else {
+            eprintln!("session events ({}):", events.len());
+            for ev in &events {
+                eprintln!("  [turn {}] {}: {}", ev.turn, ev.action_id, ev.event_type);
+            }
+        }
+    }
     let exit = match result.status {
         ReviewStatus::Approved => cli_common::ExitCode::Approved,
         ReviewStatus::ChangesRequested => cli_common::ExitCode::ChangesRequested,

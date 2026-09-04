@@ -5,6 +5,46 @@ use agent_kernel::model::{
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
+fn parse_content_completion(content: &str) -> Option<Value> {
+    // 1. Pure JSON object (struct):
+    if let Ok(obj @ Value::Object(_)) = serde_json::from_str::<Value>(content) {
+        return Some(obj);
+    }
+    // 2. Markdown ```json block:
+    if let Some(start) = content.find("```json") {
+        let after = &content[start + "```json".len()..];
+        if let Some(end) = after.find("```") {
+            let json_str = after[..end].trim();
+            if let Ok(obj @ Value::Object(_)) = serde_json::from_str::<Value>(json_str) {
+                return Some(obj);
+            }
+        }
+    }
+    // 3. Generic ``` block (no language label):
+    if let Some(start) = content.find("```") {
+        let after = &content[start + 3..];
+        // Skip a possible language label on first line.
+        let body_start = after.find('\n').map(|n| n + 1).unwrap_or(0);
+        let body = &after[body_start..];
+        if let Some(end) = body.find("```") {
+            let json_str = body[..end].trim();
+            if let Ok(obj @ Value::Object(_)) = serde_json::from_str::<Value>(json_str) {
+                return Some(obj);
+            }
+        }
+    }
+    // 4. Find a JSON object embedded in prose (base JSON at the end of text).
+    let mut search_from = 0;
+    while let Some(pos) = content[search_from..].find('{') {
+        let abs_pos = search_from + pos;
+        if let Ok(obj @ Value::Object(_)) = serde_json::from_str::<Value>(&content[abs_pos..]) {
+            return Some(obj);
+        }
+        search_from = abs_pos + 1;
+    }
+    None
+}
+
 /// OpenAI-compatible model provider adapter.
 ///
 /// Serializes canonical model requests into the OpenAI chat completion API
@@ -140,7 +180,7 @@ impl OpenAiProvider {
             } else if let Some(content) = choice.and_then(|c| c["message"]["content"].as_str()) {
                 // A live model returns its findings as message content (a JSON object).
                 // Convert that into a completion request so the kernel can validate it.
-                if let Ok(payload @ Value::Object(_)) = serde_json::from_str::<Value>(content) {
+                if let Some(payload) = parse_content_completion(content) {
                     vec![ModelAction::CompletionRequest {
                         action_id: "completion".into(),
                         payload,

@@ -49,16 +49,23 @@ impl Default for ReviewConfig {
     }
 }
 
-pub fn run_review(request: &ReviewRequest, config: &ReviewConfig) -> ReviewResult {
+pub fn run_review(
+    request: &ReviewRequest,
+    config: &ReviewConfig,
+) -> (ReviewResult, Vec<LedgerEvent>, Option<String>) {
     match compose_and_run(request, config) {
-        Ok(result) => result,
-        Err(_) => ReviewResult {
-            schema: "review.result/v1".to_string(),
-            status: ReviewStatus::Indeterminate,
-            reason: ReviewReason::ReviewEngineNotAvailable,
-            review_id: String::new(),
-            completed_at: String::new(),
-        },
+        Ok((result, events)) => (result, events, None),
+        Err(reason) => (
+            ReviewResult {
+                schema: "review.result/v1".to_string(),
+                status: ReviewStatus::Indeterminate,
+                reason: ReviewReason::ReviewEngineNotAvailable,
+                review_id: String::new(),
+                completed_at: String::new(),
+            },
+            vec![],
+            Some(reason),
+        ),
     }
 }
 
@@ -66,7 +73,10 @@ fn open_repo(path: &Path) -> Result<GitRepo, String> {
     GitRepo::open(path).map_err(|e| format!("open repository: {e:?}"))
 }
 
-fn compose_and_run(request: &ReviewRequest, config: &ReviewConfig) -> Result<ReviewResult, String> {
+fn compose_and_run(
+    request: &ReviewRequest,
+    config: &ReviewConfig,
+) -> Result<(ReviewResult, Vec<LedgerEvent>), String> {
     if config.api_key.is_empty() {
         return Err("missing API key".into());
     }
@@ -129,8 +139,8 @@ fn compose_and_run(request: &ReviewRequest, config: &ReviewConfig) -> Result<Rev
     };
     let coordinator =
         SessionCoordinator::new(app, provider, RandomIdGenerator::new(), catalog, limits);
-    let (result, _events) = coordinator.run_full(request.clone());
-    Ok(result)
+    let (result, events) = coordinator.run_full(request.clone());
+    Ok((result, events))
 }
 
 /// Deterministic output seam for replay tests.
@@ -247,7 +257,11 @@ impl AgentApplication for ReviewApplication {
     }
 
     fn build_context(&self, _state: &Self::State) -> Vec<ContextBlock> {
-        vec![]
+        vec![
+            ContextBlock {
+                content: "Review the code change in this repository. Begin by calling get_change_summary to inspect the change, then call read_diff, read_file, list_directory, or search_text as needed. When you have enough information, issue a completion with your findings as a JSON object of the form {\"findings\":[{\"blocking\": <bool>, \"message\": \"<string>\"}]}.".into()
+            }
+        ]
     }
 
     fn validate_request(&self, request: &Self::Request) -> Result<(), Self::Error> {
