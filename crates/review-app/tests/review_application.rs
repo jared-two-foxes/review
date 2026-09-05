@@ -418,7 +418,13 @@ fn requirements_orientation_is_framed_as_data_for_analysis() {
         .find(|message| {
             message["role"] == "user"
                 && message["content"]
-                    == "Requirements for this change (what the change is suppose to do): The endpoint must reject malformed JSON from clients."
+                    .as_str()
+                    .is_some_and(|content| {
+                        content.contains("[untrusted requirements data")
+                            && content.contains(
+                                "Requirements for this change (what the change is supposed to do): The endpoint must reject malformed JSON from clients.",
+                            )
+                    })
         })
         .expect("resolved requirements must be one distinct orientation user context block");
     assert_eq!(requirement_context["role"], "user");
@@ -513,8 +519,11 @@ fn read_http_body(stream: &mut std::net::TcpStream) -> String {
             let header = String::from_utf8_lossy(&bytes[..header_end]);
             let content_length = header
                 .lines()
-                .find_map(|line| line.strip_prefix("Content-Length: "))
-                .and_then(|value| value.trim().parse::<usize>().ok())
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                })
                 .expect("content length");
             let body_start = header_end + 4;
             if bytes.len() >= body_start + content_length {
