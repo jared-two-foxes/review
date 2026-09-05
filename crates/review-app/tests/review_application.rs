@@ -8,9 +8,17 @@ use agent_kernel::{
     tools::ToolCatalog,
 };
 use agent_protocol::{FixedClock, RandomIdGenerator, SequenceIdGenerator, SystemClock};
-use review_app::{ReadChangeTool, ReviewApplication};
+use review_app::{
+    ReadChangeTool, ReviewApplication, ReviewConfig, run_review as run_composed_review,
+};
 use review_protocol::{ReviewRequest, ReviewResult, ReviewStatus};
 use serde_json::json;
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::path::PathBuf;
+use std::process::Command;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 // ── Scripted provider (same pattern as fake_app) ──
 struct ScriptedModelProvider {
@@ -100,7 +108,6 @@ fn read_change_then_completion_no_findings_produces_approved() {
 #[test]
 fn premature_completion_rejected_then_approved() {
     let result = run_review(vec![
-        // Turn 1: try to complete before reading change — should be rejected
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
                 action_id: "act-1".into(),
@@ -108,7 +115,6 @@ fn premature_completion_rejected_then_approved() {
             }],
             usage: None,
         },
-        // Turn 2: read the change
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
                 action_id: "act-2".into(),
@@ -117,7 +123,6 @@ fn premature_completion_rejected_then_approved() {
             }],
             usage: None,
         },
-        // Turn 3: now completion should be accepted
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
                 action_id: "act-3".into(),
@@ -269,8 +274,8 @@ fn finding_struct_supports_enriched_fields_and_prompt_describes_them() {
     );
 
     let completion = app
-           .parse_completion(&json!({"findings": [{"blocking": true, "message": "bug in file", "path": "src/main.rs", "line": 42, "severity": "high", "recommendation": "fix the null check"}]}))
-           .expect("parse enriched completion");
+        .parse_completion(&json!({"findings": [{"blocking": true, "message": "bug in file", "path": "src/main.rs", "line": 42, "severity": "high", "recommendation": "fix the null check"}]}))
+        .expect("parse enriched completion");
     assert_eq!(completion.findings.len(), 1);
     let f = &completion.findings[0];
     assert_eq!(f.blocking, true);
@@ -340,4 +345,183 @@ fn requirements_appear_in_orientation_context() {
         "orientation context must include the requirements content: {:?}",
         context
     );
+}
+
+#[test]
+fn requirements_orientation_is_framed_as_data_for_analysis() {
+    let root = unique_test_directory();
+    create_two_commit_repository(&root);
+    let requirements_path = root.join("requirements.txt");
+    std::fs::write(
+        &requirements_path,
+        "The endpoint must reject malformed JSON from clients.",
+    )
+    .expect("write requirements file");
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local model server");
+    let address = listener.local_addr().expect("local server address");
+    let requests = Arc::new(Mutex::new(Vec::<String>::new()));
+    let captured = Arc::clone(&requests);
+    let server = std::thread::spawn(move || {
+        for turn in 0..2 {
+            let (mut stream, _) = listener.accept().expect("accept model request");
+            let body = read_http_body(&mut stream);
+            captured.lock().expect("capture lock").push(body);
+            let response = if turn == 0 {
+                r#"{"choices":[{"message":{"tool_calls":[{"id":"act-1","function":{"name":"get_change_summary","arguments":"{}"}}]}}],"usage":{}}"#
+            } else {
+                r#"{"choices":[{"message":{"content":"{\"findings\":[{\"blocking\":false,\"message\":\"ok\",\"severity\":\"low\"}]}"}}],"usage":{}}"#
+            };
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response.len(),
+                response
+            );
+            stream
+                .write_all(reply.as_bytes())
+                .expect("write model response");
+        }
+    });
+
+    let (result, _events, error) = run_composed_review(
+        &ReviewRequest {
+            schema: "review.request/v1".into(),
+            repository_path: root.to_string_lossy().into_owned(),
+            base_ref: "HEAD~1".into(),
+            head_ref: "HEAD".into(),
+            requirements: Some(requirements_path.to_string_lossy().into_owned()),
+        },
+        &ReviewConfig {
+            api_key: "test-key".into(),
+            model: "test-model".into(),
+            base_url: format!("http://{}", address),
+            max_turns: 10,
+            max_tool_calls: 10,
+            max_completion_attempts: 10,
+            wall_clock_budget: None,
+        },
+    );
+    server.join().expect("model server");
+
+    assert!(error.is_none(), "review must reach the model: {:?}", error);
+    assert!(matches!(result.status, ReviewStatus::Approved));
+    let captured = requests.lock().expect("capture lock");
+    assert_eq!(captured.len(), 2);
+
+    let first_request: serde_json::Value =
+        serde_json::from_str(&captured[0]).expect("provider request must be JSON");
+    let messages = first_request["messages"]
+        .as_array()
+        .expect("provider request must contain messages");
+    let requirement_context = messages
+        .iter()
+        .find(|message| {
+            message["role"] == "user"
+                && message["content"]
+                    == "Requirements for this change (what the change is suppose to do): The endpoint must reject malformed JSON from clients."
+        })
+        .expect("resolved requirements must be one distinct orientation user context block");
+    assert_eq!(requirement_context["role"], "user");
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message["role"] == "user")
+            .count(),
+        2
+    );
+    assert_ne!(
+        requirement_context["content"],
+        messages
+            .iter()
+            .find(|message| message["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("Begin by calling get_change_summary")))
+            .expect("generic review task must remain a separate context block")["content"]
+    );
+
+    std::fs::remove_dir_all(root).expect("remove test repository");
+}
+
+fn unique_test_directory() -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "review-app-requirements-{}-{}",
+        std::process::id(),
+        nonce
+    ))
+}
+
+fn create_two_commit_repository(root: &PathBuf) {
+    std::fs::create_dir_all(root.join("src")).expect("create repository");
+    run_git(root, &["init"]);
+    std::fs::write(root.join("src/main.rs"), "fn main() {}\n").expect("write initial source");
+    run_git(root, &["add", "."]);
+    run_git(
+        root,
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@test.com",
+            "commit",
+            "-m",
+            "initial",
+        ],
+    );
+    std::fs::write(
+        root.join("src/main.rs"),
+        "fn main() { println!(\"changed\"); }\n",
+    )
+    .expect("write changed source");
+    run_git(root, &["add", "."]);
+    run_git(
+        root,
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@test.com",
+            "commit",
+            "-m",
+            "changed",
+        ],
+    );
+}
+
+fn run_git(root: &PathBuf, args: &[&str]) {
+    let status = Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .status()
+        .expect("run git");
+    assert!(status.success(), "git command failed: {:?}", args);
+}
+
+fn read_http_body(stream: &mut std::net::TcpStream) -> String {
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let count = stream.read(&mut chunk).expect("read model request");
+        if count == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..count]);
+        if let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+            let header = String::from_utf8_lossy(&bytes[..header_end]);
+            let content_length = header
+                .lines()
+                .find_map(|line| line.strip_prefix("Content-Length: "))
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .expect("content length");
+            let body_start = header_end + 4;
+            if bytes.len() >= body_start + content_length {
+                return String::from_utf8(bytes[body_start..body_start + content_length].to_vec())
+                    .expect("UTF-8 model request");
+            }
+        }
+    }
+    panic!("model request ended before its body was received");
 }

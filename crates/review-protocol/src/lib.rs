@@ -27,7 +27,7 @@ pub struct ReviewRequest {
     pub repository_path: String,
     pub base_ref: String,
     pub head_ref: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requirements: Option<String>,
 }
 
@@ -86,6 +86,9 @@ pub fn validate_request(request: &ReviewRequest) -> Result<(), String> {
     }
     if request.head_ref.is_empty() {
         return Err("head_ref must not be empty".into());
+    }
+    if matches!(request.requirements.as_deref(), Some("")) {
+        return Err("requirements must not be empty".into());
     }
     Ok(())
 }

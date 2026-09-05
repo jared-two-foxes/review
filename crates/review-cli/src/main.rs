@@ -1,5 +1,5 @@
 use review_app::ReviewConfig;
-use review_protocol::ReviewStatus;
+use review_protocol::{ReviewRequest, ReviewStatus};
 use std::path::Path;
 use std::time::Duration;
 
@@ -12,6 +12,10 @@ fn main() {
     let mut max_turns: u32 = 10;
     let mut wall_clock_budget_secs: u64 = 60;
     let mut emit_events = false;
+    let mut repository: Option<String> = None;
+    let mut base_ref: Option<String> = None;
+    let mut head_ref: Option<String> = None;
+    let mut requirements_path: Option<String> = None;
 
     let mut i = 1; // Skip program name
     while i < args.len() {
@@ -45,25 +49,60 @@ fn main() {
                 emit_events = true;
                 i += 1;
             }
+            "--repository" => {
+                repository = Some(args[i + 1].clone());
+                i += 1;
+            }
+            "--base-ref" => {
+                base_ref = Some(args[i + 1].clone());
+                i += 1;
+            }
+            "--head-ref" => {
+                head_ref = Some(args[i + 1].clone());
+                i += 1;
+            }
+            "--requirements" => {
+                requirements_path = Some(args[i + 1].clone());
+                i += 1;
+            }
             _ => {}
         }
         i += 1;
     }
 
-    let path = request_path.expect("--request is required");
-
-    let bytes = match cli_common::read_request(Path::new(path)) {
-        Ok(b) => b,
-        Err(e) => return emit_error("REQUEST_READ_FAILED", &e.to_string()),
-    };
-
-    let request: review_protocol::ReviewRequest = match cli_common::parse_strict_json(&bytes) {
-        Ok(r) => r,
-        Err(cli_common::ParseError::Syntax(_e)) => {
-            return emit_error("REQUEST_PARSE_FAILED", "request is not valid JSON");
+    let request: ReviewRequest = if let Some(path) = request_path {
+        // File flow: the request (including optional requirements) comes from the file.
+        let bytes = match cli_common::read_request(Path::new(path)) {
+            Ok(b) => b,
+            Err(e) => return emit_error("REQUEST_READ_FAILED", &e.to_string()),
+        };
+        match cli_common::parse_strict_json(&bytes) {
+            Ok(r) => r,
+            Err(cli_common::ParseError::Syntax(_e)) => {
+                return emit_error("REQUEST_PARSE_FAILED", "request is not valid JSON");
+            }
+            Err(cli_common::ParseError::DuplicateKey(key)) => {
+                return emit_error("DUPLICATE_KEY", &format!("duplicate key: {}", key));
+            }
         }
-        Err(cli_common::ParseError::DuplicateKey(key)) => {
-            return emit_error("DUPLICATE_KEY", &format!("duplicate key: {}", key));
+    } else {
+        // Demo shape: construct the request from CLI args
+        let repository = repository.expect("--repository or --request is required");
+        let base_ref = base_ref.expect("--base-ref or --request is required");
+        let head_ref = head_ref.expect("--head-ref or --request is required");
+        let requirements = match requirements_path {
+            Some(path) => match std::fs::read_to_string(&path) {
+                Ok(content) => Some(content),
+                Err(e) => return emit_error("REQUIREMENTS_READ_FAILED", &e.to_string()),
+            },
+            None => None,
+        };
+        ReviewRequest {
+            schema: "review.request/v1".into(),
+            repository_path: repository,
+            base_ref,
+            head_ref,
+            requirements,
         }
     };
 

@@ -62,3 +62,55 @@ fn binary_runs_composition_root_and_reports_indeterminate_on_provider_failure() 
         "indeterminate exit code"
     );
 }
+
+#[test]
+fn demo_requirements_file_reaches_composition_root() {
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let requirements_path = std::env::temp_dir().join(format!(
+        "review-smoke-requirements-{}.txt",
+        std::process::id()
+    ));
+    fs::write(
+        &requirements_path,
+        "The change must preserve backwards compatibility.",
+    )
+    .expect("write requirements fixture");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_review-cli"))
+        .args([
+            "run",
+            "--repository",
+            workspace_root.to_str().unwrap(),
+            "--base-ref",
+            "HEAD~1",
+            "--head-ref",
+            "HEAD",
+            "--requirements",
+            requirements_path.to_str().unwrap(),
+            "--model",
+            "test-model",
+            "--base-url",
+            "http://127.0.0.1:1/v1/chat/completions",
+            "--wall-clock-budget-secs",
+            "5",
+        ])
+        .env("OPENAI_API_KEY", "fake-key")
+        .output()
+        .expect("review CLI should be executable");
+
+    fs::remove_file(&requirements_path).ok();
+
+    let result: Value = serde_json::from_slice(&output.stdout)
+        .expect("stdout should contain a JSON review result, not a crash");
+    assert_eq!(result["schema"], "review.result/v1");
+    assert_eq!(result["status"], "INDETERMINATE");
+    assert_eq!(
+        output.status.code(),
+        Some(cli_common::ExitCode::Indeterminate as i32),
+        "indeterminate exit code"
+    );
+}
