@@ -19,10 +19,12 @@ pub struct ApplicationInitialization<S> {
     pub application_limits: Option<Limits>,
 }
 
+#[derive(Clone, Debug)]
 pub struct InstructionBlock {
     pub content: String,
 }
 
+#[derive(Clone, Debug)]
 pub struct ContextBlock {
     pub content: String,
 }

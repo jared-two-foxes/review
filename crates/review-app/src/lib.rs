@@ -170,6 +170,7 @@ pub fn run_review_with_sources<C: Clock, I: IdGenerator>(
 pub struct ReviewState {
     inspected: bool,
     findings: Vec<Finding>,
+    requirements: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -233,12 +234,13 @@ impl AgentApplication for ReviewApplication {
 
     fn initialize(
         &self,
-        _request: &Self::Request,
+        request: &Self::Request,
     ) -> Result<ApplicationInitialization<Self::State>, Self::Error> {
         Ok(ApplicationInitialization {
             initial_state: ReviewState {
                 inspected: false,
                 findings: vec![],
+                requirements: request.requirements.clone(),
             },
             requested_tools: vec![
                 "get_change_summary".into(),
@@ -259,10 +261,20 @@ impl AgentApplication for ReviewApplication {
         }]
     }
 
-    fn build_context(&self, _state: &Self::State) -> Vec<ContextBlock> {
-        vec![ContextBlock {
+    fn build_context(&self, state: &Self::State) -> Vec<ContextBlock> {
+        let mut blocks = vec![];
+        if let Some(req) = &state.requirements {
+            blocks.push(ContextBlock {
+                content: format!(
+                    "Requirements for this change (what the change is suppose to do): {}",
+                    req
+                ),
+            });
+        }
+        blocks.push(ContextBlock {
             content: "Review the code change in this repository. Begin by calling get_change_summary to inspect the change, then call read_diff, read_file, list_directory, or search_text as needed. When you have enough information, issue a completion with your findings as a JSON object of the form {\"findings\":[{\"blocking\": <bool>, \"message\": \"<string>\", \"path\": <optional or null>, \"line\": <optional or null>, \"severity\": \"<high|medium|low>\", \"recommendation\": <optional or null>}]}. Include the required severity field on every finding, include path, line, and recommendation when applicable, and include every actionable issue you found. Do not return an empty findings array; identify the most relevant concrete observation from the inspected change.".into(),
-        }]
+        });
+        blocks
     }
 
     fn validate_request(&self, request: &Self::Request) -> Result<(), Self::Error> {
@@ -294,6 +306,7 @@ impl AgentApplication for ReviewApplication {
             "kernel.tool_completed" => ReviewState {
                 inspected: true,
                 findings: state.findings.clone(),
+                requirements: state.requirements.clone(),
             },
             _ => state.clone(),
         }

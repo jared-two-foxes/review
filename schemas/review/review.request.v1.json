@@ -11,6 +11,9 @@
     "repository_path": {
       "type": "string"
     },
+    "requirements": {
+      "type": ["string", "null"]
+    },
     "schema": {
       "type": "string",
       "const": "review.request/v1"

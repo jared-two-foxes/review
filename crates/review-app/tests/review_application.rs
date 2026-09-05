@@ -67,6 +67,7 @@ fn run_review(responses: Vec<CanonicalModelResponse>) -> ReviewResult {
         repository_path: ".".into(),
         base_ref: "HEAD~1".into(),
         head_ref: "HEAD".into(),
+        requirements: None,
     };
     coordinator.run(request)
 }
@@ -190,6 +191,7 @@ fn review_application_constructible_with_production_clock_and_id_generator() {
         repository_path: ".".into(),
         base_ref: "HEAD~1".into(),
         head_ref: "HEAD".into(),
+        requirements: None,
     };
     let result = coordinator.run(request);
 
@@ -215,6 +217,7 @@ fn build_system_instructions_returns_review_policy_naming_tool_and_completion() 
         repository_path: ".".into(),
         base_ref: "HEAD~1".into(),
         head_ref: "HEAD".into(),
+        requirements: None,
     };
     let init = app.initialize(&request).expect("initialize");
     let instructions = app.build_system_instructions(&init.initial_state);
@@ -247,6 +250,7 @@ fn finding_struct_supports_enriched_fields_and_prompt_describes_them() {
         repository_path: ".".into(),
         base_ref: "HEAD~1".into(),
         head_ref: "HEAD".into(),
+        requirements: None,
     };
     let init = app.initialize(&request).expect("initialize");
     let instructions = app.build_system_instructions(&init.initial_state);
@@ -313,5 +317,27 @@ fn accepted_completion_findings_are_included_in_review_result() {
     assert_eq!(finding.path.as_deref(), Some("src/main.rs"));
     assert_eq!(finding.line, Some(42));
     assert_eq!(finding.severity, "high");
-    assert_eq!(finding.recommendation, Some("handle the error"));
+    assert_eq!(finding.recommendation, Some("handle the error".into()));
+}
+
+#[test]
+fn requirements_appear_in_orientation_context() {
+    let app = ReviewApplication::new_with_sources(
+        FixedClock::new("2025-01-01T00:00:00Z"),
+        SequenceIdGenerator::new(["rev-001"]),
+    );
+    let request = ReviewRequest {
+        schema: "review.request/v1".into(),
+        repository_path: ".".into(),
+        base_ref: "HEAD~1".into(),
+        head_ref: "HEAD".into(),
+        requirements: Some("The change must add retry logic to the HTTP client.".into()),
+    };
+    let init = app.initialize(&request).expect("initialize");
+    let context = app.build_context(&init.initial_state);
+    assert!(
+        context.iter().any(|c| c.content.contains("retry logic")),
+        "orientation context must include the requirements content: {:?}",
+        context
+    );
 }

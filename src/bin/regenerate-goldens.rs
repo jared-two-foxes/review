@@ -59,6 +59,7 @@ fn build_request() -> ReviewRequest {
         repository_path: ".".into(),
         base_ref: "HEAD~1".into(),
         head_ref: "HEAD".into(),
+        requirements: None,
     }
 }
 

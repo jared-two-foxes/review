@@ -27,6 +27,8 @@ pub struct ReviewRequest {
     pub repository_path: String,
     pub base_ref: String,
     pub head_ref: String,
+    #[serde(default)]
+    pub requirements: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -97,7 +99,7 @@ pub fn generate_schemas() -> Vec<(&'static str, String)> {
 }
 
 fn request_schema() -> String {
-    "{\n  \"$schema\": \"http://json-schema.org/draft/2020-12/schema\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"base_ref\": {\n      \"type\": \"string\"\n    },\n    \"head_ref\": {\n      \"type\": \"string\"\n    },\n    \"repository_path\": {\n      \"type\": \"string\"\n    },\n    \"schema\": {\n      \"type\": \"string\",\n      \"const\": \"review.request/v1\"\n    }\n  },\n  \"required\": [\n    \"schema\", \"repository_path\", \"base_ref\", \"head_ref\"\n  ],\n  \"title\": \"Review Request\",\n  \"type\": \"object\"\n}\n".to_string()
+    "{\n  \"$schema\": \"http://json-schema.org/draft/2020-12/schema\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"base_ref\": {\n      \"type\": \"string\"\n    },\n    \"head_ref\": {\n      \"type\": \"string\"\n    },\n    \"repository_path\": {\n      \"type\": \"string\"\n    },\n    \"requirements\": {\n      \"type\": [\"string\", \"null\"]\n    },\n    \"schema\": {\n      \"type\": \"string\",\n      \"const\": \"review.request/v1\"\n    }\n  },\n  \"required\": [\n    \"schema\", \"repository_path\", \"base_ref\", \"head_ref\"\n  ],\n  \"title\": \"Review Request\",\n  \"type\": \"object\"\n}\n".to_string()
 }
 
 fn review_schema() -> String {
