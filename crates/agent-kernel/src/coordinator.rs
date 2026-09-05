@@ -6,6 +6,8 @@ use crate::ledger::{InMemoryLedger, LedgerEvent, Limits};
 use crate::model::{CanonicalModelRequest, ModelAction, ModelProvider, UsageRecord};
 use crate::tools::ToolCatalog;
 
+const UNTRUSTED_REPOSITORY_CONTENT_MARKER: &str = "[untrusted repository content]";
+
 pub struct SessionCoordinator<A, P, I> {
     app: A,
     provider: P,
@@ -85,7 +87,7 @@ where
             let instructions = self.app.build_system_instructions(&state);
             let mut context = self.app.build_context(&state);
             context.extend(tool_result_contents.iter().map(|content| ContextBlock {
-                content: content.clone(),
+                content: format!("{} {}", UNTRUSTED_REPOSITORY_CONTENT_MARKER, content),
             }));
             let model_request = CanonicalModelRequest {
                 instructions,

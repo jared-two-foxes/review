@@ -40,7 +40,7 @@ impl ModelProvider for RecordingProvider {
     fn generate_with_deadline(
         &mut self,
         request: &CanonicalModelRequest,
-        deadline: Instant,
+        _deadline: Instant,
     ) -> Result<CanonicalModelResponse, ModelError> {
         self.generate(request)
     }
@@ -484,10 +484,10 @@ fn tool_result_is_fed_back_into_next_model_request() {
     );
     let turn2_context = &captured[1];
     assert!(
-        turn2_context
-            .iter()
-            .any(|c| c.contains("tool-output-marker")),
-        "turn-2 model request context must contain the turn-1 tool result content: {:?}",
+        turn2_context.iter().any(|c| {
+            c.contains("tool-output-marker") && c.contains("[untrusted repository content]")
+        }),
+        "turn-2 model request context must contain the tool result content with its untrusted label: {:?}",
         turn2_context
     );
 }
@@ -546,5 +546,93 @@ fn rejection_and_richer_feedback_are_fed_back_into_next_model_request() {
         turn3.iter().any(|c| c.contains("no such tool")),
         "turn-3 context must contain corrective feedback for the rejected tool call: {:?}",
         turn3
+    );
+}
+
+#[test]
+fn untrusted_label_appears_in_tool_result_feedback() {
+    let captured: Rc<RefCell<Vec<Vec<String>>>> = Rc::new(RefCell::new(vec![]));
+    let provider = RecordingProvider {
+        responses: vec![
+            CanonicalModelResponse {
+                actions: vec![ModelAction::ToolCall {
+                    action_id: "act-1".into(),
+                    tool: "echo".into(),
+                    arguments: json!({"data": "repo-content"}),
+                }],
+                usage: None,
+            },
+            CanonicalModelResponse {
+                actions: vec![ModelAction::CompletionRequest {
+                    action_id: "act-2".into(),
+                    payload: json!({}),
+                }],
+                usage: None,
+            },
+        ],
+        index: 0,
+        captured_contexts: Rc::clone(&captured),
+    };
+    let coordinator = build_coordinator(provider);
+    let _ = coordinator.run(EchoRequest);
+
+    let captured = captured.borrow();
+    assert!(captured.len() >= 2, "expected at least 2 model calls");
+    let turn2_context = &captured[1];
+    assert!(
+        turn2_context
+            .iter()
+            .any(|c| c.contains("[untrusted repository content]")),
+        "tool result fed back to the model must carry an untrusted label: {:?}",
+        turn2_context
+    );
+}
+
+#[test]
+fn rejected_tool_result_is_labeled_as_untrusted_repository_content() {
+    let captured: Rc<RefCell<Vec<Vec<String>>>> = Rc::new(RefCell::new(vec![]));
+    let provider = RecordingProvider {
+        responses: vec![
+            CanonicalModelResponse {
+                actions: vec![ModelAction::ToolCall {
+                    action_id: "act-1".into(),
+                    tool: "missing-tool".into(),
+                    arguments: json!({}),
+                }],
+                usage: None,
+            },
+            CanonicalModelResponse {
+                actions: vec![ModelAction::ToolCall {
+                    action_id: "act-2".into(),
+                    tool: "echo".into(),
+                    arguments: json!({}),
+                }],
+                usage: None,
+            },
+            CanonicalModelResponse {
+                actions: vec![ModelAction::CompletionRequest {
+                    action_id: "act-3".into(),
+                    payload: json!({}),
+                }],
+                usage: None,
+            },
+        ],
+        index: 0,
+        captured_contexts: Rc::clone(&captured),
+    };
+
+    let coordinator = build_coordinator(provider);
+    let _ = coordinator.run(EchoRequest);
+
+    let captured = captured.borrow();
+    assert!(captured.len() >= 2, "expected at least 2 model calls");
+    let turn2_context = &captured[1];
+    assert!(
+        turn2_context.iter().any(|content| {
+            content.contains("no such tool")
+                && content.starts_with("[untrusted repository content]")
+        }),
+        "every tool-result context entry, including rejected calls, must be marked as untrusted repository content: {:?}",
+        turn2_context
     );
 }

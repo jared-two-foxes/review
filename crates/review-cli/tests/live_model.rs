@@ -11,13 +11,12 @@ use std::process::Command;
 /// reproducible check against a real repository and model.
 #[test]
 fn live_binary_emits_verdict_with_findings() {
-    let api_key = match std::env::var("OPENAI_API_KEY") {
-        Ok(value) if !value.is_empty() => value,
-        _ => {
-            eprintln!("skipping live model test: OPENAI_API_KEY is not set");
-            return;
-        }
-    };
+    if std::env::var("REVIEW_LIVE_TEST").is_err() {
+        eprintln!("skipping live model test: set REVIEW_LIVE_TEST=1 to run");
+        return;
+    }
+    let api_key =
+        std::env::var("OPENAI_API_KEY").expect("REVIEW_LIVE_TEST is set but OPENAI_API_KEY is not");
 
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
