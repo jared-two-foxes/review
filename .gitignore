@@ -1,2 +1,5 @@
 /target
 /.scaffold
+/.pi
+
+.ticket-adhoc*
