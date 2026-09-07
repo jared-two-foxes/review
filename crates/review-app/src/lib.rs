@@ -120,10 +120,12 @@ fn compose_and_run(
     )));
     catalog.register(Box::new(ListDirectoryTool::new(
         open_repo(path)?,
+        head,
         SecurityPolicy::new(),
     )));
     catalog.register(Box::new(SearchTextTool::new(
         open_repo(path)?,
+        head,
         SecurityPolicy::new(),
     )));
 

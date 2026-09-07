@@ -445,6 +445,16 @@ fn requirements_orientation_is_framed_as_data_for_analysis() {
             .expect("generic review task must remain a separate context block")["content"]
     );
 
+    let second_request: serde_json::Value = serde_json::from_str(&captured[1]).unwrap();
+    let messages = second_request["messages"].as_array().unwrap();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m["role"] == "user"
+                && m["content"].as_str().is_some_and(|c| c.contains("sha256:"))),
+        "fed-back tool result must carry the observation identity: {messages:?}"
+    );
+
     std::fs::remove_dir_all(root).expect("remove test repository");
 }
 

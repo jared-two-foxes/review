@@ -3,7 +3,6 @@ use agent_kernel::tools::{Tool, ToolResult, ToolStatus};
 use git2::Oid;
 use serde_json::{Value, json};
 use sha2::Digest;
-use std::path::Path;
 
 use crate::diff::{FileStatus, changed_files, read_diff};
 use crate::repo::GitRepo;
@@ -77,6 +76,7 @@ impl Tool for GetChangeSummaryTool {
                 "total_insertions": stats.insertions(),
                 "total_deletions": stats.deletions(),
                 "files": file_entries,
+                "snapshot_id": crate::snapshot::snapshot_id(self.base, self.head),
             }),
         }
     }
@@ -163,7 +163,10 @@ impl Tool for GetChangedFilesTool {
 
         ToolResult {
             status: ToolStatus::Succeeded,
-            value: json!({"files": files}),
+            value: json!({
+                "files": files,
+                "snapshot_id": crate::snapshot::snapshot_id(self.base, self.head),
+            }),
         }
     }
 }
@@ -242,6 +245,7 @@ impl Tool for ReadDiffTool {
                         "content":diff.content,
                         "truncated": diff.truncated,
                         "content_id": content_id,
+                        "snapshot_id": crate::snapshot::snapshot_id(self.base, self.head),
                     }),
                 }
             }
@@ -360,9 +364,34 @@ impl Tool for ReadFileTool {
                 "truncated": truncated,
                 "completeness": completeness,
                 "content_id": content_id,
+                "observed_head": self.head.to_string(),
             }),
         }
     }
+}
+
+fn collect_tree_entries(
+    tree: &git2::Tree,
+    path: &str,
+    policy: &SecurityPolicy,
+) -> Vec<(String, String)> {
+    tree.iter()
+        .filter_map(|entry| {
+            let name = entry.name()?.to_string();
+            let rel = format!("{path}/{name}")
+                .trim_start_matches("./")
+                .to_string();
+            if policy.is_path_denied(&rel) {
+                return None;
+            }
+            let ty = match entry.kind() {
+                Some(git2::ObjectType::Tree) => "dir".into(),
+                Some(git2::ObjectType::Blob) => "file".into(),
+                _ => return None,
+            };
+            Some((name, ty))
+        })
+        .collect()
 }
 
 /// Additive compile-time scaffold for the directory-listing tool. The tool
@@ -370,12 +399,13 @@ impl Tool for ReadFileTool {
 /// bounded, typed listing behavior is implemented.
 pub struct ListDirectoryTool {
     repo: GitRepo,
+    head: Oid,
     policy: crate::security::SecurityPolicy,
 }
 
 impl ListDirectoryTool {
-    pub fn new(repo: GitRepo, policy: crate::security::SecurityPolicy) -> Self {
-        Self { repo, policy }
+    pub fn new(repo: GitRepo, head: Oid, policy: crate::security::SecurityPolicy) -> Self {
+        Self { repo, head, policy }
     }
 }
 
@@ -419,38 +449,59 @@ impl Tool for ListDirectoryTool {
                 };
             }
         };
-        let validated = match self.policy.validate_path(&self.repo, path) {
-            Ok(p) => p,
+
+        if self.policy.is_path_denied(path) {
+            return ToolResult {
+                status: ToolStatus::Denied,
+                value: json!({"error": "path denied"}),
+            };
+        }
+
+        let git_repo = self.repo.raw_repo();
+        let head_tree = match git_repo.find_commit(self.head).and_then(|c| c.tree()) {
+            Ok(t) => t,
             Err(_) => {
                 return ToolResult {
                     status: ToolStatus::Failed,
-                    value: json!({"error": "path denied"}),
+                    value: json!({"error": "failed to resolve head tree"}),
                 };
             }
         };
-        let mut entries: Vec<(String, &str)> = match std::fs::read_dir(&validated) {
-            Ok(rd) => rd
-                .flatten()
-                .filter_map(|entry| {
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    let rel = format!("{path}/{name}")
-                        .trim_start_matches("./")
-                        .to_string();
-                    if self.policy.is_path_denied(&rel) {
-                        return None;
+
+        let mut entries: Vec<(String, String)> = if path == "." || path.is_empty() {
+            collect_tree_entries(&head_tree, path, &self.policy)
+        } else {
+            match head_tree.get_path(std::path::Path::new(path)) {
+                Ok(entry) if entry.kind() == Some(git2::ObjectType::Tree) => {
+                    match entry
+                        .to_object(git_repo)
+                        .ok()
+                        .and_then(|obj| obj.as_tree().cloned())
+                    {
+                        Some(sub) => collect_tree_entries(&sub, path, &self.policy),
+                        None => {
+                            return ToolResult {
+                                status: ToolStatus::Failed,
+                                value: json!({"error": "failed to resolve directory at head"}),
+                            };
+                        }
                     }
-                    let ft = entry.file_type().ok()?;
-                    let ty = if ft.is_dir() { "dir" } else { "file" };
-                    Some((name, ty))
-                })
-                .collect(),
-            Err(_) => {
-                return ToolResult {
-                    status: ToolStatus::Failed,
-                    value: json!({"error": "failed to read directory"}),
-                };
+                }
+                Ok(_) => {
+                    return ToolResult {
+                        status: ToolStatus::Failed,
+                        value: json!({"error": "path is not a directory at head"}),
+                    };
+                }
+                Err(_) => {
+                    return ToolResult {
+                        status: ToolStatus::Failed,
+                        value: json!({"error": "directory not found at head"}),
+                    };
+                }
             }
         };
+
         entries.sort_by(|a, b| a.0.cmp(&b.0));
         let limit = self.policy.entries_limit();
         let truncated = entries.len() > limit;
@@ -465,6 +516,7 @@ impl Tool for ListDirectoryTool {
                 "entries": entries_json,
                 "truncated": truncated,
                 "completeness": !truncated,
+                "observed_head": self.head.to_string(),
             }),
         }
     }
@@ -472,12 +524,13 @@ impl Tool for ListDirectoryTool {
 
 pub struct SearchTextTool {
     repo: GitRepo,
+    head: Oid,
     policy: crate::security::SecurityPolicy,
 }
 
 impl SearchTextTool {
-    pub fn new(repo: GitRepo, policy: crate::security::SecurityPolicy) -> Self {
-        Self { repo, policy }
+    pub fn new(repo: GitRepo, head: Oid, policy: crate::security::SecurityPolicy) -> Self {
+        Self { repo, head, policy }
     }
 }
 
@@ -521,22 +574,18 @@ impl Tool for SearchTextTool {
                 };
             }
         };
-        let root = match self.policy.validate_path(&self.repo, ".") {
-            Ok(p) => p,
+        let repo = self.repo.raw_repo();
+        let tree = match repo.find_commit(self.head).and_then(|c| c.tree()) {
+            Ok(t) => t,
             Err(_) => {
                 return ToolResult {
                     status: ToolStatus::Failed,
-                    value: json!({"error": "root path denied"}),
+                    value: json!({"error": "failed to resolve head tree"}),
                 };
             }
         };
-        let repo_root = self
-            .repo
-            .root()
-            .canonicalize()
-            .unwrap_or_else(|_| self.repo.root().to_path_buf());
         let mut matches: Vec<(String, usize, String)> = Vec::new();
-        search_walk(&root, &repo_root, query, &self.policy, &mut matches);
+        search_tree_walk(repo, &tree, "", query, &self.policy, &mut matches);
         matches.sort();
         let limit = self.policy.matches_limit();
         let completeness = matches.len() <= limit;
@@ -547,44 +596,60 @@ impl Tool for SearchTextTool {
             .collect();
         ToolResult {
             status: ToolStatus::Succeeded,
-            value: json!({"matches": matches_json, "completeness": completeness}),
+            value: json!({
+                "matches": matches_json,
+                "completeness": completeness,
+                "observed_head": self.head.to_string(),
+            }),
         }
     }
 }
 
-fn search_walk(
-    dir: &Path,
-    repo_root: &Path,
+fn search_tree_walk(
+    repo: &git2::Repository,
+    tree: &git2::Tree,
+    prefix: &str,
     query: &str,
     policy: &SecurityPolicy,
     matches: &mut Vec<(String, usize, String)>,
 ) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
+    for entry in tree.iter() {
+        let (Some(name), Some(kind)) = (entry.name(), entry.kind()) else {
             continue;
         };
-        if file_type.is_symlink() {
-            continue;
-        }
-        let Ok(rel) = path.strip_prefix(repo_root) else {
-            continue;
+        let rel = if prefix.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}/{}", prefix, name)
         };
-        let rel_str = rel.to_string_lossy().replace('\\', "/");
-        if policy.is_path_denied(&rel_str) {
+        if policy.is_path_denied(&rel) {
             continue;
         }
-        if file_type.is_dir() {
-            search_walk(&path, repo_root, query, policy, matches);
-        } else if let Ok(content) = std::fs::read_to_string(&path) {
-            for (idx, line) in content.lines().enumerate() {
-                if line.contains(query) {
-                    matches.push((rel_str.clone(), idx + 1, line.to_string()));
+        match kind {
+            git2::ObjectType::Tree => {
+                if let Ok(obj) = entry.to_object(repo)
+                    && let Some(sub) = obj.as_tree()
+                {
+                    search_tree_walk(repo, sub, &rel, query, policy, matches);
                 }
             }
+            git2::ObjectType::Blob => {
+                // Skip symlink-mode blobs: their content is a target path, not file text.
+                if entry.filemode_raw() & 0o170000 == 0o120000 {
+                    continue;
+                }
+                if let Ok(obj) = entry.to_object(repo)
+                    && let Some(blob) = obj.as_blob()
+                    && let Ok(content) = String::from_utf8(blob.content().to_vec())
+                {
+                    for (idx, line) in content.lines().enumerate() {
+                        if line.contains(query) {
+                            matches.push((rel.clone(), idx + 1, line.to_string()));
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }
