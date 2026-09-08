@@ -190,5 +190,8 @@ fn search_text_returns_failed_result_when_head_tree_cannot_be_resolved() {
     let result = (&tool as &dyn Tool).execute(&json!({"query": "foo.bar"}));
 
     assert!(matches!(result.status, ToolStatus::Failed));
-    assert_eq!(result.value, json!({"error": "failed to resolve head tree"}));
+    assert_eq!(
+        result.value,
+        json!({"error": "failed to resolve head tree"})
+    );
 }

@@ -3,3 +3,5 @@
 /.pi
 
 .ticket-adhoc*
+/tests/repositories/
+/tests/evaluation-output.json

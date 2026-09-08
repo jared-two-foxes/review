@@ -8,7 +8,7 @@ use agent_kernel::coordinator::SessionCoordinator;
 use agent_kernel::tools::ToolCatalog;
 use agent_kernel::{
     ledger::{LedgerEvent, Limits},
-    model::{ToolDescription, UsageRecord},
+    model::{ModelProvider, ToolDescription, UsageRecord},
     tools::{Tool, ToolResult, ToolStatus},
 };
 use agent_protocol::{Clock, IdGenerator, RandomIdGenerator, SystemClock};
@@ -75,13 +75,15 @@ fn open_repo(path: &Path) -> Result<GitRepo, String> {
     GitRepo::open(path).map_err(|e| format!("open repository: {e:?}"))
 }
 
-fn compose_and_run(
+/// Run a review using the production repository tools and the supplied model
+/// provider.  Keeping provider construction outside this function makes the
+/// complete review pipeline usable with deterministic providers as well as the
+/// live model adapter.
+pub fn run_review_with_provider<P: ModelProvider>(
     request: &ReviewRequest,
     config: &ReviewConfig,
+    provider: P,
 ) -> Result<(ReviewResult, Vec<LedgerEvent>), String> {
-    if config.api_key.is_empty() {
-        return Err("missing API key".into());
-    }
     let path = Path::new(&request.repository_path);
     let ref_repo = open_repo(path)?;
     let base = ref_repo
@@ -96,7 +98,6 @@ fn compose_and_run(
 
     let byte_limit = 65_536usize;
     let mut catalog = ToolCatalog::new();
-
     catalog.register(Box::new(GetChangeSummaryTool::new(
         open_repo(path)?,
         base,
@@ -142,11 +143,6 @@ fn compose_and_run(
         })
         .transpose()?;
 
-    let provider = OpenAiProvider::new(
-        config.base_url.as_str(),
-        config.api_key.as_str(),
-        config.model.as_str(),
-    );
     let app = ReviewApplication::new_with_sources(SystemClock::new(), RandomIdGenerator::new())
         .with_requirements(requirements);
     let limits = Limits {
@@ -157,8 +153,22 @@ fn compose_and_run(
     };
     let coordinator =
         SessionCoordinator::new(app, provider, RandomIdGenerator::new(), catalog, limits);
-    let (result, events) = coordinator.run_full(request.clone());
-    Ok((result, events))
+    Ok(coordinator.run_full(request.clone()))
+}
+
+fn compose_and_run(
+    request: &ReviewRequest,
+    config: &ReviewConfig,
+) -> Result<(ReviewResult, Vec<LedgerEvent>), String> {
+    if config.api_key.is_empty() {
+        return Err("missing API key".into());
+    }
+    let provider = OpenAiProvider::new(
+        config.base_url.as_str(),
+        config.api_key.as_str(),
+        config.model.as_str(),
+    );
+    run_review_with_provider(request, config, provider)
 }
 
 /// Deterministic output seam for replay tests.
