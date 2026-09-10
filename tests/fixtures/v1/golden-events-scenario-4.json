@@ -21,6 +21,7 @@
     "session_id": "ses-001",
     "turn": 1,
     "action_id": "act-1",
-    "execution_id": ""
+    "execution_id": "",
+    "details": "invalid arguments: invalid arguments: \"not-an-object\" is not of type \"object\""
   }
 ]

@@ -2,6 +2,7 @@ use review_app::ReviewConfig;
 use review_protocol::{ReviewRequest, ReviewStatus};
 use std::path::Path;
 use std::time::Duration;
+use tracing_subscriber::EnvFilter;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -78,6 +79,18 @@ fn main() {
         i += 1;
     }
 
+    let filter = if std::env::var("RUST_LOG").is_ok() {
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("error"))
+    } else if emit_events {
+        EnvFilter::new("info")
+    } else {
+        EnvFilter::new("error")
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
+
     let request: ReviewRequest = if let Some(path) = request_path {
         // File flow: the request (including optional requirements) comes from the file.
         let bytes = match cli_common::read_request(Path::new(&path)) {
@@ -141,18 +154,12 @@ fn main() {
     };
     let (result, events, setup_err) = review_app::run_review(&request, &config);
 
+    if let Some(reason) = setup_err {
+        tracing::warn!(error = %reason, "review setup failed");
+    }
+
     cli_common::write_json_stdout(&result).expect("failed to write result");
 
-    if emit_events {
-        if let Some(reason) = setup_err {
-            eprintln!("review setup failed: {}", reason);
-        } else {
-            eprintln!("session events ({}):", events.len());
-            for ev in &events {
-                eprintln!("  [turn {}] {}: {}", ev.turn, ev.action_id, ev.event_type);
-            }
-        }
-    }
     let exit = match result.status {
         ReviewStatus::Approved => cli_common::ExitCode::Approved,
         ReviewStatus::ChangesRequested => cli_common::ExitCode::ChangesRequested,

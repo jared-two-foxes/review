@@ -4,6 +4,7 @@ use agent_kernel::model::{
 };
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
+use tracing;
 
 fn parse_content_completion(content: &str) -> Option<Value> {
     // 1. Pure JSON object (struct):
@@ -152,6 +153,34 @@ impl OpenAiProvider {
         let response: Value = resp
             .json()
             .map_err(|e| ModelError::ApiError(e.to_string()))?;
+
+        if let Some(choice) = response["choices"].get(0) {
+            let finish_reason = choice["finish_reason"].as_str().unwrap_or("unknown");
+            let tool_names: Vec<&str> = choice["message"]["tool_calls"]
+                .as_array()
+                .map(|calls| {
+                    calls
+                        .iter()
+                        .filter_map(|c| c["function"]["name"].as_str())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let content = choice["message"]["content"].as_str().unwrap_or("");
+            tracing::debug!(
+                "OpenAI response: finish_reason={}, tool_names={:?}, content={}",
+                finish_reason,
+                tool_names,
+                content
+            );
+            if !content.is_empty() {
+                let preview = if content.len() > 300 {
+                    format!("{}...", &content[..300])
+                } else {
+                    content.to_string()
+                };
+                tracing::trace!(content_preview = %preview, "OpenAI response content");
+            }
+        }
 
         let choice = response["choices"].get(0);
         let actions: Vec<ModelAction> =

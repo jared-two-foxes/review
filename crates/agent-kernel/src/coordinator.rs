@@ -1,5 +1,6 @@
 use agent_protocol::IdGenerator;
 use std::time::Instant;
+use tracing;
 
 use crate::application::{AgentApplication, CompletionDecision, ContextBlock};
 use crate::ledger::{InMemoryLedger, LedgerEvent, Limits};
@@ -96,6 +97,7 @@ where
             };
 
             self.append_event(&session_id, turn, "", "kernel.model_started");
+            tracing::info!(turn, "model started");
 
             // Call the model
             let generation = match session_deadline {
@@ -106,8 +108,15 @@ where
             };
             let response = match generation {
                 Ok(r) => r,
-                Err(_) => {
-                    self.append_event(&session_id, turn, "", "kernel.model_failed");
+                Err(e) => {
+                    tracing::warn!(turn, error = ?e, "model failed");
+                    self.append_event_with_details(
+                        &session_id,
+                        turn,
+                        "",
+                        "kernel.model_failed",
+                        Some(format!("{:?}", e)),
+                    );
                     self.append_event(&session_id, turn, "", "kernel.session_indeterminate");
                     return (
                         self.app.build_terminal_result(&state, &usage),
@@ -127,6 +136,7 @@ where
                     };
             }
 
+            tracing::info!(turn, "model completed");
             self.append_event(&session_id, turn, "", "kernel.model_completed");
 
             // Dispatch each action sequentially
@@ -149,6 +159,7 @@ where
                             Some(t) => t,
                             None => {
                                 tool_result_contents.push(format!("Tool call {} for \"{}\" was rejected: no such tool is available.", action_id, tool));
+                                tracing::warn!(turn, action_id, tool = %tool, "tool rejected: no such tool is available");
                                 self.append_event(
                                     &session_id,
                                     turn,
@@ -164,11 +175,13 @@ where
                                 "Tool call {} for \"{}\" was rejected: invalid arguments: {}",
                                 action_id, tool, msg
                             ));
-                            self.append_event(
+                            tracing::warn!(turn, action_id, tool= %tool, "tool rejected: invalid arguments");
+                            self.append_event_with_details(
                                 &session_id,
                                 turn,
                                 &action_id,
                                 "kernel.action_rejected",
+                                Some(format!("invalid arguments: {}", msg)),
                             );
                             // Do NOT call execute
                             continue;
@@ -180,6 +193,7 @@ where
                             tool, action_id, result.status, result.value
                         ));
 
+                        tracing::info!(turn, action_id, tool= %tool, "tool completed");
                         let event = self.append_event(
                             &session_id,
                             turn,
@@ -200,12 +214,14 @@ where
 
                         let completion = match self.app.parse_completion(&payload) {
                             Ok(c) => c,
-                            Err(_) => {
-                                self.append_event(
+                            Err(e) => {
+                                tracing::warn!(turn, action_id, "completion rejected: parse error");
+                                self.append_event_with_details(
                                     &session_id,
                                     turn,
                                     &action_id,
                                     "kernel.completion_rejected",
+                                    Some(format!("{:?}", e)),
                                 );
                                 continue;
                             }
@@ -213,6 +229,7 @@ where
 
                         match self.app.validate_completion(&state, &completion) {
                             CompletionDecision::Accepted => {
+                                tracing::info!(turn, action_id, "completion accepted");
                                 self.append_event(
                                     &session_id,
                                     turn,
@@ -233,6 +250,7 @@ where
                                         block.content
                                     ));
                                 }
+                                tracing::warn!(turn, action_id, "completion rejected: remediable");
                                 self.append_event(
                                     &session_id,
                                     turn,
@@ -245,6 +263,7 @@ where
                                 // turn and tool_call_count are NOT reset
                             }
                             CompletionDecision::RejectedTerminal { .. } => {
+                                tracing::warn!(turn, action_id, "completion rejected: terminal");
                                 self.append_event(
                                     &session_id,
                                     turn,
@@ -285,6 +304,17 @@ where
         action_id: &str,
         event_type: &str,
     ) -> LedgerEvent {
+        self.append_event_with_details(session_id, turn, action_id, event_type, None)
+    }
+
+    fn append_event_with_details(
+        &mut self,
+        session_id: &str,
+        turn: u32,
+        action_id: &str,
+        event_type: &str,
+        details: Option<String>,
+    ) -> LedgerEvent {
         let execution_id = self.id_gen.next_id();
         self.ledger.append(LedgerEvent {
             event_type: event_type.into(),
@@ -293,6 +323,7 @@ where
             turn,
             action_id: action_id.into(),
             execution_id,
+            details,
         })
     }
 

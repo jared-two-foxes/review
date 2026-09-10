@@ -9,6 +9,8 @@ pub struct LedgerEvent {
     pub turn: u32,
     pub action_id: String,
     pub execution_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
 }
 
 #[derive(Default)]

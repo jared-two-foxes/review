@@ -7,6 +7,8 @@ edition = "2024"
 cli-common = { path = "../cli-common" }
 review-protocol = { path = "../review-protocol" }
 review-app = { path = "../review-app" }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 cli-common = { path = "../cli-common" }
