@@ -1,7 +1,8 @@
 use agent_kernel::tools::{Tool, ToolStatus};
 use code_agent_runtime::repo::GitRepo;
 use code_agent_runtime::security::SecurityPolicy;
-use code_agent_runtime::snapshot::resolve_commits;
+use code_agent_runtime::snapshot::resolve_targets;
+use code_agent_runtime::target::ReviewTarget;
 use code_agent_runtime::tools::ListDirectoryTool;
 use serde_json::json;
 use std::process::Command;
@@ -57,7 +58,7 @@ fn make_repo_with_directory_entries() -> TempDir {
 fn list_directory_returns_typed_entries_bounded_by_entry_limit() {
     let dir = make_repo_with_directory_entries();
     let repo = GitRepo::open(dir.path()).unwrap();
-    let (_, head) = resolve_commits(&repo, "HEAD", "HEAD").unwrap();
+    let (_, head) = resolve_targets(&repo, "HEAD", "HEAD").unwrap();
     let policy = SecurityPolicy::with_entries_limit(2);
     let tool = ListDirectoryTool::new(repo, head, policy);
 
@@ -83,7 +84,11 @@ fn list_directory_returns_typed_entries_bounded_by_entry_limit() {
 fn list_directory_rejects_denied_paths_before_tree_lookup() {
     let dir = make_repo_with_directory_entries();
     let repo = GitRepo::open(dir.path()).unwrap();
-    let tool = ListDirectoryTool::new(repo, git2::Oid::zero(), SecurityPolicy::new());
+    let tool = ListDirectoryTool::new(
+        repo,
+        ReviewTarget::Commit(git2::Oid::zero()),
+        SecurityPolicy::new(),
+    );
 
     let result = (&tool as &dyn Tool).execute(&json!({"path": ".git"}));
 
@@ -96,7 +101,11 @@ fn list_directory_rejects_denied_paths_before_tree_lookup() {
 fn list_directory_denies_rooted_paths_before_tree_lookup() {
     let dir = make_repo_with_directory_entries();
     let repo = GitRepo::open(dir.path()).unwrap();
-    let tool = ListDirectoryTool::new(repo, git2::Oid::zero(), SecurityPolicy::new());
+    let tool = ListDirectoryTool::new(
+        repo,
+        ReviewTarget::Commit(git2::Oid::zero()),
+        SecurityPolicy::new(),
+    );
 
     // Parent traversal is explicitly rejected by the path-denial predicate.
     // The invalid head makes ordering observable: resolving it first would

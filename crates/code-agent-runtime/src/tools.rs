@@ -1,24 +1,24 @@
 use agent_kernel::model::ToolDescription;
 use agent_kernel::tools::{Tool, ToolResult, ToolStatus};
-use git2::Oid;
 use serde_json::{Value, json};
 use sha2::Digest;
 
-use crate::diff::{FileStatus, changed_files, read_diff};
+use crate::diff::{FileStatus, changed_files, compute_diff, read_diff};
 use crate::repo::GitRepo;
 use crate::security::{SecurityPolicy, bound_bytes};
+use crate::target::ReviewTarget;
 
 /// Minimal API scaffold for the change-summary tool. The implementation is
 /// intentionally incomplete; the behavior is supplied by the production work
 /// driven by the integration test.
 pub struct GetChangeSummaryTool {
     repo: GitRepo,
-    base: Oid,
-    head: Oid,
+    base: ReviewTarget,
+    head: ReviewTarget,
 }
 
 impl GetChangeSummaryTool {
-    pub fn new(repo: GitRepo, base: Oid, head: Oid) -> Self {
+    pub fn new(repo: GitRepo, base: ReviewTarget, head: ReviewTarget) -> Self {
         Self { repo, base, head }
     }
 }
@@ -45,15 +45,16 @@ impl Tool for GetChangeSummaryTool {
     }
 
     fn execute(&self, _arguments: &Value) -> ToolResult {
-        let repo = self.repo.raw_repo();
-        let base_tree = repo.find_commit(self.base).unwrap().tree().unwrap();
-        let head_tree = repo.find_commit(self.head).unwrap().tree().unwrap();
-        let mut opts = git2::DiffOptions::new();
-        let diff = repo
-            .diff_tree_to_tree(Some(&base_tree), Some(&head_tree), Some(&mut opts))
-            .unwrap();
-
-        let files = changed_files(&self.repo, self.base, self.head).unwrap_or_default();
+        let diff = match compute_diff(&self.repo, &self.base, &self.head, None) {
+            Ok(d) => d,
+            Err(_) => {
+                return ToolResult {
+                    status: ToolStatus::Failed,
+                    value: json!({"error": "failed to compute diff"}),
+                };
+            }
+        };
+        let files = changed_files(&self.repo, &self.base, &self.head).unwrap_or_default();
         let file_entries: Vec<Value> = files
             .iter()
             .map(|f| {
@@ -76,7 +77,7 @@ impl Tool for GetChangeSummaryTool {
                 "total_insertions": stats.insertions(),
                 "total_deletions": stats.deletions(),
                 "files": file_entries,
-                "snapshot_id": crate::snapshot::snapshot_id(self.base, self.head),
+                "snapshot_id": crate::snapshot::snapshot_id(&self.repo, &self.base, &self.head),
             }),
         }
     }
@@ -84,12 +85,12 @@ impl Tool for GetChangeSummaryTool {
 
 pub struct GetChangedFilesTool {
     repo: GitRepo,
-    base: Oid,
-    head: Oid,
+    base: ReviewTarget,
+    head: ReviewTarget,
 }
 
 impl GetChangedFilesTool {
-    pub fn new(repo: GitRepo, base: Oid, head: Oid) -> Self {
+    pub fn new(repo: GitRepo, base: ReviewTarget, head: ReviewTarget) -> Self {
         Self { repo, base, head }
     }
 }
@@ -116,7 +117,7 @@ impl Tool for GetChangedFilesTool {
     }
 
     fn execute(&self, _arguments: &Value) -> ToolResult {
-        let changes = match changed_files(&self.repo, self.base, self.head) {
+        let changes = match changed_files(&self.repo, &self.base, &self.head) {
             Ok(c) => c,
             Err(_) => {
                 return ToolResult {
@@ -125,32 +126,20 @@ impl Tool for GetChangedFilesTool {
                 };
             }
         };
-        let git_repo = self.repo.raw_repo();
-        let head_tree = match git_repo.find_commit(self.head).and_then(|c| c.tree()) {
-            Ok(t) => t,
-            Err(_) => {
-                return ToolResult {
-                    status: ToolStatus::Failed,
-                    value: json!({"error": "failed to resolve head tree"}),
-                };
-            }
-        };
-
         let files: Vec<Value> = changes
             .iter()
             .map(|change| {
                 let content_id = if change.status == FileStatus::Deleted {
                     Value::Null
                 } else {
-                    head_tree
-                        .get_path(std::path::Path::new(&change.path))
-                        .and_then(|entry| entry.to_object(git_repo))
+                    self.head
+                        .read_file(&self.repo, &change.path)
                         .ok()
-                        .and_then(|obj| obj.as_blob().map(|blob| blob.content().to_vec()))
                         .map(|content| {
-                            let digest = sha2::Sha256::digest(&content);
-                            Value::String(format!("sha256:{}", hex::encode(digest)))
+                            let hash = sha2::Sha256::digest(&content);
+                            format!("sha256:{}", hex::encode(hash))
                         })
+                        .map(Value::String)
                         .unwrap_or(Value::Null)
                 };
                 json!({
@@ -165,7 +154,7 @@ impl Tool for GetChangedFilesTool {
             status: ToolStatus::Succeeded,
             value: json!({
                 "files": files,
-                "snapshot_id": crate::snapshot::snapshot_id(self.base, self.head),
+                "snapshot_id": crate::snapshot::snapshot_id(&self.repo, &self.base, &self.head),
             }),
         }
     }
@@ -176,13 +165,13 @@ impl Tool for GetChangedFilesTool {
 /// is supplied.
 pub struct ReadDiffTool {
     repo: GitRepo,
-    base: Oid,
-    head: Oid,
+    base: ReviewTarget,
+    head: ReviewTarget,
     byte_limit: usize,
 }
 
 impl ReadDiffTool {
-    pub fn new(repo: GitRepo, base: Oid, head: Oid, byte_limit: usize) -> Self {
+    pub fn new(repo: GitRepo, base: ReviewTarget, head: ReviewTarget, byte_limit: usize) -> Self {
         Self {
             repo,
             base,
@@ -232,7 +221,7 @@ impl Tool for ReadDiffTool {
                 };
             }
         };
-        match read_diff(&self.repo, self.base, self.head, path, self.byte_limit) {
+        match read_diff(&self.repo, &self.base, &self.head, path, self.byte_limit) {
             Ok(diff) => {
                 let content_id = format!(
                     "sha256:{}",
@@ -245,7 +234,7 @@ impl Tool for ReadDiffTool {
                         "content":diff.content,
                         "truncated": diff.truncated,
                         "content_id": content_id,
-                        "snapshot_id": crate::snapshot::snapshot_id(self.base, self.head),
+                        "snapshot_id": crate::snapshot::snapshot_id(&self.repo, &self.base, &self.head),
                     }),
                 }
             }
@@ -262,16 +251,23 @@ impl Tool for ReadDiffTool {
 /// head-commit reader and metadata are implemented.
 pub struct ReadFileTool {
     repo: GitRepo,
-    head: Oid,
+    head: ReviewTarget,
     byte_limit: usize,
+    policy: SecurityPolicy,
 }
 
 impl ReadFileTool {
-    pub fn new(repo: GitRepo, head: Oid, byte_limit: usize) -> Self {
+    pub fn new(
+        repo: GitRepo,
+        head: ReviewTarget,
+        byte_limit: usize,
+        policy: SecurityPolicy,
+    ) -> Self {
         Self {
             repo,
             head,
             byte_limit,
+            policy,
         }
     }
 }
@@ -284,7 +280,7 @@ impl Tool for ReadFileTool {
     fn description(&self) -> ToolDescription {
         ToolDescription {
             name: self.name().to_string(),
-            description: "Read a file from the repository head commit.".to_string(),
+            description: "Read a file from the repository head.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -316,32 +312,21 @@ impl Tool for ReadFileTool {
                 };
             }
         };
-        let git_repo = self.repo.raw_repo();
-        let head_tree = match git_repo.find_commit(self.head).and_then(|c| c.tree()) {
+        if self.policy.is_path_denied(path) {
+            return ToolResult {
+                status: ToolStatus::Denied,
+                value: json!({"error": "path denied"}),
+            };
+        }
+        let content_bytes: Vec<u8> = match self.head.read_file(&self.repo, path) {
             Ok(t) => t,
-            Err(_) => {
+            Err(e) => {
                 return ToolResult {
                     status: ToolStatus::Failed,
-                    value: json!({"error": "failed to resolve head tree"}),
+                    value: json!({"error": format!("failed to read {} at {}: {}", path, self.head.label(&self.repo), e)}),
                 };
             }
         };
-        let blob = match head_tree
-            .get_path(std::path::Path::new(path))
-            .and_then(|entry| entry.to_object(git_repo))
-        {
-            Ok(obj) => obj,
-            Err(_) => {
-                return ToolResult {
-                    status: ToolStatus::Failed,
-                    value: json!({"error": "file not found at head"}),
-                };
-            }
-        };
-        let content_bytes = blob
-            .as_blob()
-            .map(|b| b.content().to_vec())
-            .unwrap_or_default();
         let content_id = format!(
             "sha256:{}",
             hex::encode(sha2::Sha256::digest(&content_bytes))
@@ -364,7 +349,7 @@ impl Tool for ReadFileTool {
                 "truncated": truncated,
                 "completeness": completeness,
                 "content_id": content_id,
-                "observed_head": self.head.to_string(),
+                "observed_head": self.head.label(&self.repo),
             }),
         }
     }
@@ -394,17 +379,107 @@ fn collect_tree_entries(
         .collect()
 }
 
+fn collect_workdir_entries(
+    repo: &GitRepo,
+    path: &str,
+    policy: &SecurityPolicy,
+) -> Result<Vec<(String, String)>, crate::error::RepoError> {
+    let base = if path == "." || path.is_empty() {
+        repo.root().to_path_buf()
+    } else {
+        repo.canonicalize_path(path)?
+    };
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(base)
+        .map_err(|e| crate::error::RepoError::Other(format!("failed to read directory: {}", e)))?
+    {
+        let entry = entry.map_err(|e| {
+            crate::error::RepoError::Other(format!("failed to read directory entry: {}", e))
+        })?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name == ".git" {
+            continue;
+        }
+        let rel = if path == "." || path.is_empty() {
+            name.clone()
+        } else {
+            format!("{}/{}", path, name)
+        };
+        if policy.is_path_denied(&rel) {
+            continue;
+        }
+        let file_type = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => {
+                continue;
+            }
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        let ty = if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            "dir".into()
+        } else {
+            "file".into()
+        };
+        entries.push((name, ty));
+    }
+    Ok(entries)
+}
+
+fn collect_index_entries(
+    repo: &GitRepo,
+    path: &str,
+    policy: &SecurityPolicy,
+) -> Result<Vec<(String, String)>, crate::error::RepoError> {
+    let index = repo.index()?;
+    let prefix = if path == "." || path.is_empty() {
+        ""
+    } else {
+        path
+    };
+    let mut entries = Vec::new();
+    let mut seen_dirs = std::collections::HashSet::new();
+    for entry in index.iter() {
+        let entry_path = String::from_utf8_lossy(&entry.path).to_string();
+        if !prefix.is_empty() && !entry_path.starts_with(&format!("{}/", prefix)) {
+            continue;
+        }
+        let rel = if prefix.is_empty() {
+            entry_path.clone()
+        } else {
+            entry_path[prefix.len() + 1..].to_string()
+        };
+        if let Some(slash) = rel.find('/') {
+            let dir_name = &rel[..slash];
+            if seen_dirs.insert(dir_name.to_string()) {
+                let full = if prefix.is_empty() {
+                    dir_name.to_string()
+                } else {
+                    format!("{}/{}", prefix, dir_name)
+                };
+                if !policy.is_path_denied(&full) {
+                    entries.push((dir_name.to_string(), "dir".to_string()));
+                }
+            }
+        } else if !policy.is_path_denied(&rel) {
+            entries.push((rel.clone(), "file".to_string()));
+        }
+    }
+    Ok(entries)
+}
+
 /// Additive compile-time scaffold for the directory-listing tool. The tool
 /// remains deliberately stubbed so its integration test fails until the
 /// bounded, typed listing behavior is implemented.
 pub struct ListDirectoryTool {
     repo: GitRepo,
-    head: Oid,
+    head: ReviewTarget,
     policy: crate::security::SecurityPolicy,
 }
 
 impl ListDirectoryTool {
-    pub fn new(repo: GitRepo, head: Oid, policy: crate::security::SecurityPolicy) -> Self {
+    pub fn new(repo: GitRepo, head: ReviewTarget, policy: crate::security::SecurityPolicy) -> Self {
         Self { repo, head, policy }
     }
 }
@@ -457,49 +532,72 @@ impl Tool for ListDirectoryTool {
             };
         }
 
-        let git_repo = self.repo.raw_repo();
-        let head_tree = match git_repo.find_commit(self.head).and_then(|c| c.tree()) {
-            Ok(t) => t,
-            Err(_) => {
-                return ToolResult {
-                    status: ToolStatus::Failed,
-                    value: json!({"error": "failed to resolve head tree"}),
+        let mut entries: Vec<(String, String)> = match &self.head {
+            ReviewTarget::Commit(oid) => {
+                let git_repo = self.repo.raw_repo();
+                let head_tree = match git_repo.find_commit(*oid).and_then(|c| c.tree()) {
+                    Ok(t) => t,
+                    Err(_) => {
+                        return ToolResult {
+                            status: ToolStatus::Failed,
+                            value: json!({"error": "failed to resolve head tree"}),
+                        };
+                    }
                 };
-            }
-        };
-
-        let mut entries: Vec<(String, String)> = if path == "." || path.is_empty() {
-            collect_tree_entries(&head_tree, path, &self.policy)
-        } else {
-            match head_tree.get_path(std::path::Path::new(path)) {
-                Ok(entry) if entry.kind() == Some(git2::ObjectType::Tree) => {
-                    match entry
-                        .to_object(git_repo)
-                        .ok()
-                        .and_then(|obj| obj.as_tree().cloned())
-                    {
-                        Some(sub) => collect_tree_entries(&sub, path, &self.policy),
-                        None => {
+                if path == "." || path.is_empty() {
+                    collect_tree_entries(&head_tree, path, &self.policy)
+                } else {
+                    match head_tree.get_path(std::path::Path::new(path)) {
+                        Ok(entry) if entry.kind() == Some(git2::ObjectType::Tree) => {
+                            match entry
+                                .to_object(git_repo)
+                                .ok()
+                                .and_then(|obj| obj.as_tree().cloned())
+                            {
+                                Some(sub) => collect_tree_entries(&sub, path, &self.policy),
+                                None => {
+                                    return ToolResult {
+                                        status: ToolStatus::Failed,
+                                        value: json!({"error": "failed to resolve directory at head"}),
+                                    };
+                                }
+                            }
+                        }
+                        Ok(_) => {
                             return ToolResult {
                                 status: ToolStatus::Failed,
-                                value: json!({"error": "failed to resolve directory at head"}),
+                                value: json!({"error": "path is not a directory at head"}),
+                            };
+                        }
+                        Err(_) => {
+                            return ToolResult {
+                                status: ToolStatus::Failed,
+                                value: json!({"error": "directory not found at head"}),
                             };
                         }
                     }
                 }
-                Ok(_) => {
-                    return ToolResult {
-                        status: ToolStatus::Failed,
-                        value: json!({"error": "path is not a directory at head"}),
-                    };
+            }
+            ReviewTarget::WorkingDirectory => {
+                match collect_workdir_entries(&self.repo, path, &self.policy) {
+                    Ok(e) => e,
+                    Err(_) => {
+                        return ToolResult {
+                            status: ToolStatus::Failed,
+                            value: json!({"error": "failed to read working directory"}),
+                        };
+                    }
                 }
+            }
+            ReviewTarget::Index => match collect_index_entries(&self.repo, path, &self.policy) {
+                Ok(e) => e,
                 Err(_) => {
                     return ToolResult {
                         status: ToolStatus::Failed,
-                        value: json!({"error": "directory not found at head"}),
+                        value: json!({"error": "failed to read index"}),
                     };
                 }
-            }
+            },
         };
 
         entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -516,7 +614,7 @@ impl Tool for ListDirectoryTool {
                 "entries": entries_json,
                 "truncated": truncated,
                 "completeness": !truncated,
-                "observed_head": self.head.to_string(),
+                "observed_head": self.head.label(&self.repo),
             }),
         }
     }
@@ -524,12 +622,12 @@ impl Tool for ListDirectoryTool {
 
 pub struct SearchTextTool {
     repo: GitRepo,
-    head: Oid,
+    head: ReviewTarget,
     policy: crate::security::SecurityPolicy,
 }
 
 impl SearchTextTool {
-    pub fn new(repo: GitRepo, head: Oid, policy: crate::security::SecurityPolicy) -> Self {
+    pub fn new(repo: GitRepo, head: ReviewTarget, policy: crate::security::SecurityPolicy) -> Self {
         Self { repo, head, policy }
     }
 }
@@ -574,18 +672,37 @@ impl Tool for SearchTextTool {
                 };
             }
         };
-        let repo = self.repo.raw_repo();
-        let tree = match repo.find_commit(self.head).and_then(|c| c.tree()) {
-            Ok(t) => t,
-            Err(_) => {
-                return ToolResult {
-                    status: ToolStatus::Failed,
-                    value: json!({"error": "failed to resolve head tree"}),
+        let mut matches: Vec<(String, usize, String)> = match &self.head {
+            ReviewTarget::Commit(oid) => {
+                let repo = self.repo.raw_repo();
+                let tree = match repo.find_commit(*oid).and_then(|c| c.tree()) {
+                    Ok(t) => t,
+                    Err(_) => {
+                        return ToolResult {
+                            status: ToolStatus::Failed,
+                            value: json!({"error": "failed to resolve head tree"}),
+                        };
+                    }
                 };
+                let mut m = Vec::new();
+                search_tree_walk(repo, &tree, "", query, &self.policy, &mut m);
+                m
             }
+            ReviewTarget::WorkingDirectory => {
+                let mut m = Vec::new();
+                search_workdir_walk(self.repo.root(), "", query, &self.policy, &mut m);
+                m
+            }
+            ReviewTarget::Index => match search_index(&self.repo, query, &self.policy) {
+                Ok(m) => m,
+                Err(_) => {
+                    return ToolResult {
+                        status: ToolStatus::Failed,
+                        value: json!({"error": "failed to search index"}),
+                    };
+                }
+            },
         };
-        let mut matches: Vec<(String, usize, String)> = Vec::new();
-        search_tree_walk(repo, &tree, "", query, &self.policy, &mut matches);
         matches.sort();
         let limit = self.policy.matches_limit();
         let completeness = matches.len() <= limit;
@@ -599,7 +716,7 @@ impl Tool for SearchTextTool {
             value: json!({
                 "matches": matches_json,
                 "completeness": completeness,
-                "observed_head": self.head.to_string(),
+                "observed_head": self.head.label(&self.repo),
             }),
         }
     }
@@ -652,4 +769,81 @@ fn search_tree_walk(
             _ => {}
         }
     }
+}
+
+fn search_workdir_walk(
+    dir: &std::path::Path,
+    prefix: &str,
+    query: &str,
+    policy: &SecurityPolicy,
+    matches: &mut Vec<(String, usize, String)>,
+) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = match entry.file_name().into_string() {
+                Ok(n) => n,
+                Err(_) => continue,
+            };
+            if name == ".git" {
+                continue;
+            }
+            let rel = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{}/{}", prefix, name)
+            };
+            if policy.is_path_denied(&rel) {
+                continue;
+            }
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => {
+                    continue;
+                }
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            let path = entry.path();
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                search_workdir_walk(&path, &rel, query, policy, matches);
+            } else if let Ok(content) = std::fs::read_to_string(&path) {
+                for (idx, line) in content.lines().enumerate() {
+                    if line.contains(query) {
+                        matches.push((rel.clone(), idx + 1, line.to_string()));
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn search_index(
+    repo: &GitRepo,
+    query: &str,
+    policy: &SecurityPolicy,
+) -> Result<Vec<(String, usize, String)>, crate::error::RepoError> {
+    let index = repo.index()?;
+    let git_repo = repo.raw_repo();
+    let mut matches = Vec::new();
+    for entry in index.iter() {
+        let path = String::from_utf8_lossy(&entry.path).to_string();
+        if policy.is_path_denied(&path) {
+            continue;
+        }
+        // Skip symlink entries
+        if entry.mode & 0o170000 == 0o120000 {
+            continue;
+        }
+        if let Ok(blob) = git_repo.find_blob(entry.id) {
+            if let Ok(content) = String::from_utf8(blob.content().to_vec()) {
+                for (idx, line) in content.lines().enumerate() {
+                    if line.contains(query) {
+                        matches.push((path.clone(), idx + 1, line.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    Ok(matches)
 }

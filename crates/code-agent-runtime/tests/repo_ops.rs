@@ -1,7 +1,8 @@
 use code_agent_runtime::diff::{FileStatus, changed_files, read_diff};
 use code_agent_runtime::error::RepoError;
 use code_agent_runtime::repo::GitRepo;
-use code_agent_runtime::snapshot::{resolve_commits, snapshot_id};
+use code_agent_runtime::snapshot::{resolve_targets, snapshot_id};
+use code_agent_runtime::target::ReviewTarget;
 use git2::Oid;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::process::Command;
@@ -85,35 +86,36 @@ fn repository_paths_are_rooted_and_canonicalized() {
 fn snapshot_id_is_deterministic() {
     let dir = make_test_repo();
     let repo = GitRepo::open(dir.path()).unwrap();
-    let (base, head) = resolve_commits(&repo, "HEAD", "HEAD").unwrap();
-    let id1 = snapshot_id(base, head);
-    let id2 = snapshot_id(base, head);
+    let (base, head) = resolve_targets(&repo, "HEAD", "HEAD").unwrap();
+    let id1 = snapshot_id(&repo, &base, &head);
+    let id2 = snapshot_id(&repo, &base, &head);
     assert_eq!(id1, id2);
     assert!(id1.starts_with("sha256:"));
 }
 
 #[test]
 fn snapshot_id_encodes_the_resolved_commit_pair() {
+    let dir = make_test_repo();
+    let repo = GitRepo::open(dir.path()).unwrap();
     let base = Oid::from_str("0123456789abcdef0123456789abcdef01234567").unwrap();
     let head = Oid::from_str("fedcba9876543210fedcba9876543210fedcba98").unwrap();
 
-    let first = snapshot_id(base, head);
-    let second = snapshot_id(base, head);
+    let first = snapshot_id(
+        &repo,
+        &ReviewTarget::Commit(base),
+        &ReviewTarget::Commit(head),
+    );
+    let second = snapshot_id(
+        &repo,
+        &ReviewTarget::Commit(base),
+        &ReviewTarget::Commit(head),
+    );
 
     assert_eq!(
         first,
         "sha256:0123456789abcdef0123456789abcdef01234567:fedcba9876543210fedcba9876543210fedcba98"
     );
     assert_eq!(second, first);
-}
-
-#[test]
-fn resolve_commits_returns_valid_oids() {
-    let dir = make_test_repo();
-    let repo = GitRepo::open(dir.path()).unwrap();
-    let (base, head) = resolve_commits(&repo, "HEAD", "HEAD").unwrap();
-    // Same ref → same commit
-    assert_eq!(base, head);
 }
 
 fn make_test_repo_with_changes() -> TempDir {
@@ -150,8 +152,8 @@ fn make_test_repo_with_changes() -> TempDir {
 fn changed_files_enumerates_status() {
     let dir = make_test_repo_with_changes();
     let repo = GitRepo::open(dir.path()).unwrap();
-    let (base, head) = resolve_commits(&repo, "HEAD~1", "HEAD").unwrap();
-    let changes = changed_files(&repo, base, head).unwrap();
+    let (base, head) = resolve_targets(&repo, "HEAD~1", "HEAD").unwrap();
+    let changes = changed_files(&repo, &base, &head).unwrap();
 
     // src/new.rs was added
     assert!(
@@ -230,8 +232,8 @@ fn make_test_repo_with_all_change_kinds() -> TempDir {
 fn changed_files_reports_added_modified_deleted_and_renamed_paths() {
     let dir = make_test_repo_with_all_change_kinds();
     let repo = GitRepo::open(dir.path()).unwrap();
-    let (base, head) = resolve_commits(&repo, "HEAD~1", "HEAD").unwrap();
-    let changes = changed_files(&repo, base, head).unwrap();
+    let (base, head) = resolve_targets(&repo, "HEAD~1", "HEAD").unwrap();
+    let changes = changed_files(&repo, &base, &head).unwrap();
 
     assert_eq!(changes.len(), 4);
     assert!(
@@ -284,8 +286,8 @@ fn read_diff_formats_hunks_and_marks_byte_limited_output() {
         .unwrap();
 
     let repo = GitRepo::open(dir.path()).unwrap();
-    let (base, head) = resolve_commits(&repo, "HEAD~1", "HEAD").unwrap();
-    let complete = read_diff(&repo, base, head, "src/main.rs", usize::MAX).unwrap();
+    let (base, head) = resolve_targets(&repo, "HEAD~1", "HEAD").unwrap();
+    let complete = read_diff(&repo, &base, &head, "src/main.rs", usize::MAX).unwrap();
     assert!(
         complete
             .content
@@ -300,7 +302,7 @@ fn read_diff_formats_hunks_and_marks_byte_limited_output() {
     let emoji_offset = complete.content.find('🦀').unwrap();
     let byte_limit = emoji_offset + 1;
     let limited = catch_unwind(AssertUnwindSafe(|| {
-        read_diff(&repo, base, head, "src/main.rs", byte_limit)
+        read_diff(&repo, &base, &head, "src/main.rs", byte_limit)
     }));
     assert!(limited.is_ok(), "byte-limited diff must not panic on UTF-8");
     let limited = limited.unwrap().unwrap();

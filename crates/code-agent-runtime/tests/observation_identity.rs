@@ -1,7 +1,8 @@
 use agent_kernel::tools::{Tool, ToolStatus};
 use code_agent_runtime::repo::GitRepo;
 use code_agent_runtime::security::SecurityPolicy;
-use code_agent_runtime::snapshot::{resolve_commits, snapshot_id};
+use code_agent_runtime::snapshot::{resolve_targets, snapshot_id};
+use code_agent_runtime::target::ReviewTarget;
 use code_agent_runtime::tools::{
     GetChangeSummaryTool, GetChangedFilesTool, ListDirectoryTool, ReadDiffTool, ReadFileTool,
     SearchTextTool,
@@ -47,8 +48,8 @@ fn make_base_head_repo_with_dirt() -> (TempDir, String, String) {
     std::fs::write(dir.path().join("src/untracked.rs"), "// dirt\n").unwrap();
 
     let repo = GitRepo::open(dir.path()).unwrap();
-    let (base, head) = resolve_commits(&repo, "HEAD~1", "HEAD").unwrap();
-    (dir, base.to_string(), head.to_string())
+    let (base, head) = resolve_targets(&repo, "HEAD~1", "HEAD").unwrap();
+    (dir, base.label(&repo), head.label(&repo))
 }
 
 fn open_repo(dir: &TempDir) -> GitRepo {
@@ -69,10 +70,18 @@ fn all_six_tools_report_consistent_observation_identity() {
     let (dir, base_hex, head_hex) = make_base_head_repo_with_dirt();
     let base_oid: git2::Oid = base_hex.parse().unwrap();
     let head_oid: git2::Oid = head_hex.parse().unwrap();
-    let expected_snapshot = snapshot_id(base_oid, head_oid);
+    let expected_snapshot = snapshot_id(
+        &open_repo(&dir),
+        &ReviewTarget::Commit(base_oid),
+        &ReviewTarget::Commit(head_oid),
+    );
 
     // Range tools: snapshot_id == snapshot_id(base, head)
-    let summary = GetChangeSummaryTool::new(open_repo(&dir), oid(&base_hex), oid(&head_hex));
+    let summary = GetChangeSummaryTool::new(
+        open_repo(&dir),
+        ReviewTarget::Commit(base_oid),
+        ReviewTarget::Commit(head_oid),
+    );
     let value = assert_success(summary.execute(&json!({})));
     assert_eq!(
         value["snapshot_id"], expected_snapshot,
@@ -94,7 +103,12 @@ fn all_six_tools_report_consistent_observation_identity() {
     );
 
     // Head-only tools: observed_head == head hex, and dirt is invisible
-    let read = ReadFileTool::new(open_repo(&dir), oid(&head_hex), 65_536);
+    let read = ReadFileTool::new(
+        open_repo(&dir),
+        oid(&head_hex),
+        65_536,
+        SecurityPolicy::new(),
+    );
     let value = assert_success(read.execute(&json!({"path": "src/main.rs"})));
     assert_eq!(value["observed_head"], head_hex, "read_file identity");
 
@@ -135,6 +149,6 @@ fn all_six_tools_report_consistent_observation_identity() {
     );
 }
 
-fn oid(hex: &str) -> git2::Oid {
-    hex.parse().unwrap()
+fn oid(hex: &str) -> ReviewTarget {
+    ReviewTarget::Commit(hex.parse().unwrap())
 }

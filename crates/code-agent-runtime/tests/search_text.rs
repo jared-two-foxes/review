@@ -1,7 +1,8 @@
 use agent_kernel::tools::{Tool, ToolStatus};
 use code_agent_runtime::repo::GitRepo;
 use code_agent_runtime::security::SecurityPolicy;
-use code_agent_runtime::snapshot::resolve_commits;
+use code_agent_runtime::snapshot::resolve_targets;
+use code_agent_runtime::target::ReviewTarget;
 use code_agent_runtime::tools::SearchTextTool;
 use git2::Oid;
 use serde_json::json;
@@ -65,7 +66,7 @@ fn make_repo_with_searchable_text() -> TempDir {
 fn search_text_returns_literal_structured_matches_with_completeness() {
     let dir = make_repo_with_searchable_text();
     let repo = GitRepo::open(dir.path()).unwrap();
-    let (_, head) = resolve_commits(&repo, "HEAD", "HEAD").unwrap();
+    let (_, head) = resolve_targets(&repo, "HEAD", "HEAD").unwrap();
     let tool = SearchTextTool::new(repo, head, SecurityPolicy::with_matches_limit(2));
 
     assert_eq!(tool.name(), "search_text");
@@ -103,7 +104,7 @@ fn search_text_returns_literal_structured_matches_with_completeness() {
 fn search_text_bounds_matches_and_reports_incompleteness() {
     let dir = make_repo_with_searchable_text();
     let repo = GitRepo::open(dir.path()).unwrap();
-    let (_, head) = resolve_commits(&repo, "HEAD", "HEAD").unwrap();
+    let (_, head) = resolve_targets(&repo, "HEAD", "HEAD").unwrap();
     let tool = SearchTextTool::new(repo, head, SecurityPolicy::with_matches_limit(3));
 
     std::fs::write(
@@ -172,7 +173,7 @@ fn search_text_ignores_symlink_targets() {
     ]);
 
     let repo = GitRepo::open(dir.path()).unwrap();
-    let (_, head) = resolve_commits(&repo, "HEAD", "HEAD").unwrap();
+    let (_, head) = resolve_targets(&repo, "HEAD", "HEAD").unwrap();
     let tool = SearchTextTool::new(repo, head, SecurityPolicy::default());
 
     let result = (&tool as &dyn Tool).execute(&json!({"query": "needle.txt"}));
@@ -185,7 +186,11 @@ fn search_text_ignores_symlink_targets() {
 fn search_text_returns_failed_result_when_head_tree_cannot_be_resolved() {
     let dir = make_repo_with_searchable_text();
     let repo = GitRepo::open(dir.path()).unwrap();
-    let tool = SearchTextTool::new(repo, Oid::zero(), SecurityPolicy::default());
+    let tool = SearchTextTool::new(
+        repo,
+        ReviewTarget::Commit(Oid::zero()),
+        SecurityPolicy::default(),
+    );
 
     let result = (&tool as &dyn Tool).execute(&json!({"query": "foo.bar"}));
 

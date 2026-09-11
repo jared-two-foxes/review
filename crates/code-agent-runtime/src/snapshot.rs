@@ -1,22 +1,19 @@
 use crate::error::RepoError;
 use crate::repo::GitRepo;
-use git2::Oid;
+use crate::target::ReviewTarget;
 
-/// Resolve base and head refs to commit identifiers.
-pub fn resolve_commits(
+/// Resolve base and head refs to review targets.
+pub fn resolve_targets(
     repo: &GitRepo,
     base_ref: &str,
     head_ref: &str,
-) -> Result<(Oid, Oid), RepoError> {
-    let base = repo.revparse_single(base_ref)?.id();
-    let head = repo.revparse_single(head_ref)?.id();
+) -> Result<(ReviewTarget, ReviewTarget), RepoError> {
+    let base = ReviewTarget::parse(repo, base_ref)?;
+    let head = ReviewTarget::parse(repo, head_ref)?;
     Ok((base, head))
 }
 
 /// Compute a deterministic snapshot ID from the base/head pair.
-/// Format: sha256:{base_hex}:{head_hex}
-/// The OID hex strings are embedded directly so the snapshot ID
-/// is human-readable and traceable to the exact commit range.
-pub fn snapshot_id(base: Oid, head: Oid) -> String {
-    format!("sha256:{}:{}", base, head)
+pub fn snapshot_id(repo: &GitRepo, base: &ReviewTarget, head: &ReviewTarget) -> String {
+    format!("sha256:{}:{}", base.label(repo), head.label(repo))
 }

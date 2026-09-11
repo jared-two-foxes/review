@@ -125,6 +125,7 @@ fn openai_provider_round_trips_canonical_request_and_tool_call() {
                 "properties": { "value": { "type": "string" } }
             }),
         }],
+        history: vec![],
     };
 
     let mut provider = OpenAiProvider::new(
@@ -200,6 +201,7 @@ fn openai_provider_maps_http_failures_to_typed_model_errors() {
         instructions: vec![],
         context: vec![],
         tools: vec![],
+        history: vec![],
     };
 
     for (status, response_body, rate_limited) in failures {
@@ -287,6 +289,7 @@ fn openai_provider_attaches_reported_usage_to_generated_response() {
         instructions: vec![],
         context: vec![],
         tools: vec![],
+        history: vec![],
     };
     let mut provider = OpenAiProvider::new(
         format!("http://{address}/v1/chat/completions"),
@@ -634,6 +637,7 @@ fn openai_provider_parses_object_shaped_tool_call_arguments() {
         instructions: vec![],
         context: vec![],
         tools: vec![],
+        history: vec![],
     };
     let mut provider = OpenAiProvider::new(
         format!("http://{address}/v1/chat/completions"),
@@ -689,6 +693,7 @@ fn openai_provider_rejects_non_object_string_tool_arguments() {
         instructions: vec![],
         context: vec![],
         tools: vec![],
+        history: vec![],
     };
     let mut provider = OpenAiProvider::new(
         format!("http://{address}/v1/chat/completions"),
@@ -735,6 +740,7 @@ fn openai_provider_parses_content_completion_into_completion_request() {
         instructions: vec![],
         context: vec![],
         tools: vec![],
+        history: vec![],
     };
     let mut provider = OpenAiProvider::new(
         format!("http://{address}/v1/chat/completions"),

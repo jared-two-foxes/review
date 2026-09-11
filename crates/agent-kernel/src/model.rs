@@ -26,9 +26,39 @@ pub struct ToolDescription {
     pub input_schema: Value,
 }
 
+/// A record of a singlet tool call made by the assistant, for conversation history
+#[derive(Clone, Debug)]
+pub struct ToolCallRecord {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
+/// A provider-independent conversation history entry.
+/// The coordinator accumulates these across turns; the provider serializes
+/// them into the appropriate format (assistant tool_calls, tool results,
+/// user feedback, etc.) for the model provider.
+#[derive(Clone, Debug)]
+pub enum ConversationMessage {
+    /// Assistant message - tool calls and/or text content (e.g. a completion
+    /// attempt)
+    Assistant {
+        content: Option<String>,
+        tool_call: Option<ToolCallRecord>,
+    },
+    /// Tool result message - keyed to a specific tool call by ID
+    Tool {
+        tool_call_id: String,
+        content: String,
+    },
+    /// User message - used for completion rejection feedback
+    User { content: String },
+}
+
 pub struct CanonicalModelRequest {
     pub instructions: Vec<InstructionBlock>,
     pub context: Vec<ContextBlock>,
+    pub history: Vec<ConversationMessage>,
     pub tools: Vec<ToolDescription>,
 }
 

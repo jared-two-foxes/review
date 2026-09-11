@@ -1,6 +1,7 @@
 use crate::error::RepoError;
 use crate::repo::GitRepo;
-use git2::Oid;
+use crate::target::ReviewTarget;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -17,16 +18,68 @@ pub struct FileChange {
     pub status: FileStatus,
 }
 
-/// Enumerate changed files between base and head commits with per-file status.
-pub fn changed_files(repo: &GitRepo, base: Oid, head: Oid) -> Result<Vec<FileChange>, RepoError> {
+/// Compute a git diff between two review targets, optionally filtered by pathspec
+pub fn compute_diff<'a>(
+    repo: &'a GitRepo,
+    base: &ReviewTarget,
+    head: &ReviewTarget,
+    pathspec: Option<&str>,
+) -> Result<git2::Diff<'a>, RepoError> {
     let git_repo = repo.raw_repo();
-    let base_tree = git_repo.find_commit(base)?.tree()?;
-    let head_tree = git_repo.find_commit(head)?.tree()?;
-    let diff = git_repo.diff_tree_to_tree(Some(&base_tree), Some(&head_tree), None)?;
+    let mut opts = git2::DiffOptions::new();
+    if let Some(path) = pathspec {
+        opts.pathspec(path);
+    }
+
+    let diff = match (base, head) {
+        (ReviewTarget::Commit(base_oid), ReviewTarget::Commit(head_oid)) => {
+            let base_tree = git_repo.find_commit(*base_oid)?.tree()?;
+            let head_tree = git_repo.find_commit(*head_oid)?.tree()?;
+            git_repo.diff_tree_to_tree(Some(&base_tree), Some(&head_tree), Some(&mut opts))?
+        }
+        (ReviewTarget::Commit(base_oid), ReviewTarget::WorkingDirectory) => {
+            let base_tree = git_repo.find_commit(*base_oid)?.tree()?;
+            opts.include_untracked(true);
+            opts.recurse_untracked_dirs(true);
+            git_repo.diff_tree_to_workdir(Some(&base_tree), Some(&mut opts))?
+        }
+        (ReviewTarget::Commit(base_oid), ReviewTarget::Index) => {
+            let base_tree = git_repo.find_commit(*base_oid)?.tree()?;
+            let index = git_repo.index()?;
+            git_repo.diff_tree_to_index(Some(&base_tree), Some(&index), Some(&mut opts))?
+        }
+        (ReviewTarget::WorkingDirectory, ReviewTarget::Commit(head_oid)) => {
+            let head_tree = git_repo.find_commit(*head_oid)?.tree()?;
+            opts.include_untracked(true);
+            opts.recurse_untracked_dirs(true);
+            opts.reverse(true);
+            git_repo.diff_tree_to_workdir(Some(&head_tree), Some(&mut opts))?
+        }
+        (ReviewTarget::Index, ReviewTarget::Commit(head_oid)) => {
+            let head_tree = git_repo.find_commit(*head_oid)?.tree()?;
+            let index = git_repo.index()?;
+            opts.reverse(true);
+            git_repo.diff_tree_to_index(Some(&head_tree), Some(&index), Some(&mut opts))?
+        }
+        _ => {
+            return Err(RepoError::Other(
+                "unsupported diff combination: at least one side must be a commit".into(),
+            ));
+        }
+    };
+    Ok(diff)
+}
+
+/// Enumerate changed files between base and head commits with per-file status.
+pub fn changed_files(
+    repo: &GitRepo,
+    base: &ReviewTarget,
+    head: &ReviewTarget,
+) -> Result<Vec<FileChange>, RepoError> {
+    let mut diff = compute_diff(repo, base, head, None)?;
 
     // Enable rename detection so renamed files are reported as Renamed,
     // not as separate Added + Deleted entries.
-    let mut diff = diff;
     let mut find_opts = git2::DiffFindOptions::new();
     find_opts.renames(true);
     diff.find_similar(Some(&mut find_opts))?;
@@ -64,18 +117,12 @@ pub fn changed_files(repo: &GitRepo, base: Oid, head: Oid) -> Result<Vec<FileCha
 /// Read the diff for a specific changed file as structured hunks with line numbers.
 pub fn read_diff(
     repo: &GitRepo,
-    base: Oid,
-    head: Oid,
+    base: &ReviewTarget,
+    head: &ReviewTarget,
     path: &str,
     byte_limit: usize,
 ) -> Result<DiffOutput, RepoError> {
-    let git_repo = repo.raw_repo();
-    let base_tree = git_repo.find_commit(base)?.tree()?;
-    let head_tree = git_repo.find_commit(head)?.tree()?;
-
-    let mut opts = git2::DiffOptions::new();
-    opts.pathspec(path);
-    let diff = git_repo.diff_tree_to_tree(Some(&base_tree), Some(&head_tree), Some(&mut opts))?;
+    let diff = compute_diff(repo, base, head, Some(path))?;
 
     let mut content = String::new();
     diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {

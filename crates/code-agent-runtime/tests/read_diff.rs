@@ -1,6 +1,6 @@
 use agent_kernel::tools::{Tool, ToolStatus};
 use code_agent_runtime::repo::GitRepo;
-use code_agent_runtime::snapshot::resolve_commits;
+use code_agent_runtime::snapshot::resolve_targets;
 use code_agent_runtime::tools::ReadDiffTool;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -89,7 +89,7 @@ fn make_repo_with_changed_file() -> TempDir {
 fn read_diff_returns_line_numbered_content_id_and_bounded_output() {
     let complete_dir = make_repo_with_changed_file();
     let complete_repo = GitRepo::open(complete_dir.path()).unwrap();
-    let (base, head) = resolve_commits(&complete_repo, "HEAD~1", "HEAD").unwrap();
+    let (base, head) = resolve_targets(&complete_repo, "HEAD~1", "HEAD").unwrap();
 
     let complete_tool = ReadDiffTool::new(complete_repo, base, head, usize::MAX);
     assert_eq!(complete_tool.name(), "read_diff");
@@ -125,7 +125,7 @@ fn read_diff_returns_line_numbered_content_id_and_bounded_output() {
         .unwrap();
     let limited_dir = make_repo_with_changed_file();
     let limited_repo = GitRepo::open(limited_dir.path()).unwrap();
-    let (limited_base, limited_head) = resolve_commits(&limited_repo, "HEAD~1", "HEAD").unwrap();
+    let (limited_base, limited_head) = resolve_targets(&limited_repo, "HEAD~1", "HEAD").unwrap();
     let limited_tool = ReadDiffTool::new(limited_repo, limited_base, limited_head, limit);
     let limited = (&limited_tool as &dyn Tool).execute(&json!({"path": "src/main.rs"}));
     assert!(matches!(limited.status, ToolStatus::Succeeded));

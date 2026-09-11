@@ -1,7 +1,7 @@
 use agent_kernel::tools::{Tool, ToolStatus};
-use code_agent_runtime::repo::GitRepo;
-use code_agent_runtime::snapshot::resolve_commits;
+use code_agent_runtime::snapshot::resolve_targets;
 use code_agent_runtime::tools::ReadFileTool;
+use code_agent_runtime::{repo::GitRepo, security::SecurityPolicy};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::process::Command;
@@ -62,8 +62,8 @@ fn make_repo_with_head_file() -> (TempDir, String) {
 fn read_file_returns_head_content_id_and_completeness_metadata() {
     let (dir, head_content) = make_repo_with_head_file();
     let repo = GitRepo::open(dir.path()).unwrap();
-    let (_, head) = resolve_commits(&repo, "HEAD", "HEAD").unwrap();
-    let tool = ReadFileTool::new(repo, head, usize::MAX);
+    let (_, head) = resolve_targets(&repo, "HEAD", "HEAD").unwrap();
+    let tool = ReadFileTool::new(repo, head, usize::MAX, SecurityPolicy::new());
 
     assert_eq!(tool.name(), "read_file");
     tool.validate_arguments(&json!({"path": "README.md"}))
@@ -85,9 +85,14 @@ fn read_file_returns_head_content_id_and_completeness_metadata() {
 
     let (limited_dir, limited_head_content) = make_repo_with_head_file();
     let limited_repo = GitRepo::open(limited_dir.path()).unwrap();
-    let (_, limited_head) = resolve_commits(&limited_repo, "HEAD", "HEAD").unwrap();
+    let (_, limited_head) = resolve_targets(&limited_repo, "HEAD", "HEAD").unwrap();
     let byte_limit = 17;
-    let limited_tool = ReadFileTool::new(limited_repo, limited_head, byte_limit);
+    let limited_tool = ReadFileTool::new(
+        limited_repo,
+        limited_head,
+        byte_limit,
+        SecurityPolicy::new(),
+    );
     let limited = (&limited_tool as &dyn Tool).execute(&json!({"path": "README.md"}));
 
     assert!(matches!(limited.status, ToolStatus::Succeeded));

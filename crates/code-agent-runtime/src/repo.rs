@@ -72,6 +72,11 @@ impl GitRepo {
         Ok(self.repo.find_commit(oid)?)
     }
 
+    /// Return the repository's current index (staged changes).
+    pub fn index(&self) -> Result<git2::Index, RepoError> {
+        Ok(self.repo.index()?)
+    }
+
     pub fn raw_repo(&self) -> &git2::Repository {
         &self.repo
     }

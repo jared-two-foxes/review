@@ -4,6 +4,7 @@ use std::path::PathBuf;
 pub enum RepoError {
     PathEscape { requested: PathBuf, root: PathBuf },
     Git(git2::Error),
+    Other(String),
 }
 
 impl std::fmt::Display for RepoError {
@@ -17,6 +18,7 @@ impl std::fmt::Display for RepoError {
                 root.display()
             ),
             Self::Git(e) => write!(f, "git error: {}", e),
+            Self::Other(msg) => write!(f, "error: {}", msg),
         }
     }
 }

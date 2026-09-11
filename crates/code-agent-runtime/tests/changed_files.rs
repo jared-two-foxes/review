@@ -1,6 +1,6 @@
 use agent_kernel::tools::{Tool, ToolStatus};
 use code_agent_runtime::repo::GitRepo;
-use code_agent_runtime::snapshot::resolve_commits;
+use code_agent_runtime::snapshot::resolve_targets;
 use code_agent_runtime::tools::GetChangedFilesTool;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -110,7 +110,7 @@ fn make_repo_with_head_changes() -> TempDir {
 fn get_changed_files_reports_head_content_ids_and_statuses() {
     let dir = make_repo_with_head_changes();
     let repo = GitRepo::open(dir.path()).unwrap();
-    let (base, head) = resolve_commits(&repo, "HEAD~1", "HEAD").unwrap();
+    let (base, head) = resolve_targets(&repo, "HEAD~1", "HEAD").unwrap();
     let tool = GetChangedFilesTool::new(repo, base, head);
 
     assert_eq!(tool.name(), "get_changed_files");

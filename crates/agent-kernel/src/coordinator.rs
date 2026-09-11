@@ -94,6 +94,7 @@ where
                 instructions,
                 context,
                 tools: tool_descriptions.clone(),
+                history: vec![], // TODO: conversation history
             };
 
             self.append_event(&session_id, turn, "", "kernel.model_started");

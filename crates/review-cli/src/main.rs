@@ -17,6 +17,7 @@ fn main() {
     let mut base_ref: Option<String> = None;
     let mut head_ref: Option<String> = None;
     let mut requirements_path: Option<String> = None;
+    let mut uncommitted = false;
 
     let mut i = 1; // Skip program name
     while i < args.len() {
@@ -74,6 +75,9 @@ fn main() {
                 requirements_path = Some(flag_value(&args, i, "--requirements"));
                 i += 1;
             }
+            "--uncommitted" => {
+                uncommitted = true;
+            }
             _ => {}
         }
         i += 1;
@@ -117,18 +121,15 @@ fn main() {
                 );
             }
         };
-        let base_ref = match base_ref {
-            Some(v) => v,
-            None => {
-                emit_error("MISSING_BASE_REF", "--base-ref or --request is required");
-            }
-        };
-        let head_ref = match head_ref {
-            Some(v) => v,
-            None => {
-                emit_error("MISSING_HEAD_REF", "--head-ref or --request is required");
-            }
-        };
+        if uncommitted && head_ref.is_some() {
+            emit_error(
+                "INVALID_ARGUMENTS",
+                "--uncommitted cannot be used with --head-ref",
+            );
+        }
+        let base_ref = base_ref.unwrap_or_else(|| "HEAD".into());
+        let head_ref = head_ref.unwrap_or_else(|| ":working".into());
+
         ReviewRequest {
             schema: "review.request/v1".into(),
             repository_path: repository,

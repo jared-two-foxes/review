@@ -12,12 +12,16 @@ use agent_kernel::{
     tools::{Tool, ToolResult, ToolStatus},
 };
 use agent_protocol::{Clock, IdGenerator, RandomIdGenerator, SystemClock};
-use code_agent_runtime::provider::OpenAiProvider;
-use code_agent_runtime::tools::{
-    GetChangeSummaryTool, GetChangedFilesTool, ListDirectoryTool, ReadDiffTool, ReadFileTool,
-    SearchTextTool,
+use code_agent_runtime::{
+    provider::OpenAiProvider,
+    repo::GitRepo,
+    security::SecurityPolicy,
+    target::ReviewTarget,
+    tools::{
+        GetChangeSummaryTool, GetChangedFilesTool, ListDirectoryTool, ReadDiffTool, ReadFileTool,
+        SearchTextTool,
+    },
 };
-use code_agent_runtime::{repo::GitRepo, security::SecurityPolicy};
 use review_protocol::{ReviewReason, ReviewRequest, ReviewResult, ReviewStatus, UsageSummary};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -86,47 +90,44 @@ pub fn run_review_with_provider<P: ModelProvider>(
 ) -> Result<(ReviewResult, Vec<LedgerEvent>), String> {
     let path = Path::new(&request.repository_path);
     let ref_repo = open_repo(path)?;
-    let base = ref_repo
-        .revparse_single(&request.base_ref)
-        .map_err(|e| format!("resolve base_ref: {e:?}"))?
-        .id();
-    let head = ref_repo
-        .revparse_single(&request.head_ref)
-        .map_err(|e| format!("resolve head_ref: {e:?}"))?
-        .id();
+    let base = ReviewTarget::parse(&ref_repo, &request.base_ref)
+        .map_err(|e| format!("resolve base_ref: {e}"))?;
+    let head = ReviewTarget::parse(&ref_repo, &request.head_ref)
+        .map_err(|e| format!("resolve head_ref: {e}"))?;
     drop(ref_repo);
 
     let byte_limit = 65_536usize;
     let mut catalog = ToolCatalog::new();
     catalog.register(Box::new(GetChangeSummaryTool::new(
         open_repo(path)?,
-        base,
-        head,
+        base.clone(),
+        head.clone(),
     )));
     catalog.register(Box::new(GetChangedFilesTool::new(
         open_repo(path)?,
-        base,
-        head,
+        base.clone(),
+        head.clone(),
     )));
     catalog.register(Box::new(ReadDiffTool::new(
         open_repo(path)?,
-        base,
-        head,
+        base.clone(),
+        head.clone(),
         byte_limit,
     )));
     catalog.register(Box::new(ReadFileTool::new(
         open_repo(path)?,
-        head,
+        head.clone(),
         byte_limit,
+        SecurityPolicy::new(),
     )));
     catalog.register(Box::new(ListDirectoryTool::new(
         open_repo(path)?,
-        head,
+        head.clone(),
         SecurityPolicy::new(),
     )));
     catalog.register(Box::new(SearchTextTool::new(
         open_repo(path)?,
-        head,
+        head.clone(),
         SecurityPolicy::new(),
     )));
 

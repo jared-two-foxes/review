@@ -1,6 +1,6 @@
 use agent_kernel::tools::{Tool, ToolStatus};
 use code_agent_runtime::repo::GitRepo;
-use code_agent_runtime::snapshot::resolve_commits;
+use code_agent_runtime::snapshot::resolve_targets;
 use code_agent_runtime::tools::GetChangeSummaryTool;
 use serde_json::json;
 use std::process::Command;
@@ -88,7 +88,7 @@ fn make_repo_with_changes() -> TempDir {
 fn get_change_summary_reports_totals_and_file_statuses() {
     let dir = make_repo_with_changes();
     let repo = GitRepo::open(dir.path()).unwrap();
-    let (base, head) = resolve_commits(&repo, "HEAD~1", "HEAD").unwrap();
+    let (base, head) = resolve_targets(&repo, "HEAD~1", "HEAD").unwrap();
     let tool = GetChangeSummaryTool::new(repo, base, head);
 
     assert_eq!(tool.name(), "get_change_summary");
