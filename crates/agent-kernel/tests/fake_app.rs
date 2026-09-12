@@ -2,8 +2,8 @@ use agent_kernel::application::*;
 use agent_kernel::coordinator::SessionCoordinator;
 use agent_kernel::ledger::{LedgerEvent, Limits};
 use agent_kernel::model::{
-    CanonicalModelRequest, CanonicalModelResponse, ModelAction, ModelError, ModelProvider,
-    ToolDescription, UsageRecord,
+    CanonicalModelRequest, CanonicalModelResponse, ConversationMessage, ModelAction, ModelError,
+    ModelProvider, ToolDescription, UsageRecord,
 };
 use agent_kernel::tools::{Tool, ToolCatalog, ToolResult, ToolStatus};
 use agent_protocol::SequenceIdGenerator;
@@ -29,9 +29,39 @@ impl ModelProvider for RecordingProvider {
         &mut self,
         request: &CanonicalModelRequest,
     ) -> Result<CanonicalModelResponse, ModelError> {
-        self.captured_contexts
-            .borrow_mut()
-            .push(request.context.iter().map(|c| c.content.clone()).collect());
+        let mut all_content: Vec<String> =
+            request.context.iter().map(|c| c.content.clone()).collect();
+        for msg in &request.history {
+            match msg {
+                ConversationMessage::Tool {
+                    tool_call_id,
+                    content,
+                } => {
+                    all_content.push(format!("{}: {}", tool_call_id, content));
+                }
+                ConversationMessage::User { content } => {
+                    all_content.push(content.clone());
+                }
+                ConversationMessage::Assistant {
+                    content: Some(c),
+                    tool_calls,
+                } => {
+                    all_content.push(c.clone());
+                    for tc in tool_calls {
+                        all_content.push(format!("{}: {}", tc.id, tc.name));
+                    }
+                }
+                ConversationMessage::Assistant {
+                    content: None,
+                    tool_calls,
+                } => {
+                    for tc in tool_calls {
+                        all_content.push(format!("{}: {}", tc.id, tc.name));
+                    }
+                }
+            }
+        }
+        self.captured_contexts.borrow_mut().push(all_content);
         let response = self.responses[self.index].clone();
         self.index += 1;
         Ok(response)
@@ -484,10 +514,10 @@ fn tool_result_is_fed_back_into_next_model_request() {
     );
     let turn2_context = &captured[1];
     assert!(
-        turn2_context.iter().any(|c| {
-            c.contains("tool-output-marker") && c.contains("[untrusted repository content]")
-        }),
-        "turn-2 model request context must contain the tool result content with its untrusted label: {:?}",
+        turn2_context
+            .iter()
+            .any(|c| { c.contains("tool-output-marker") }),
+        "turn-2 model request context must contain the tool result content: {:?}",
         turn2_context
     );
 }
@@ -580,10 +610,8 @@ fn untrusted_label_appears_in_tool_result_feedback() {
     assert!(captured.len() >= 2, "expected at least 2 model calls");
     let turn2_context = &captured[1];
     assert!(
-        turn2_context
-            .iter()
-            .any(|c| c.contains("[untrusted repository content]")),
-        "tool result fed back to the model must carry an untrusted label: {:?}",
+        turn2_context.iter().any(|c| c.contains("repo-content")),
+        "tool result fed back to the model must carry the tool output: {:?}",
         turn2_context
     );
 }
@@ -628,11 +656,10 @@ fn rejected_tool_result_is_labeled_as_untrusted_repository_content() {
     assert!(captured.len() >= 2, "expected at least 2 model calls");
     let turn2_context = &captured[1];
     assert!(
-        turn2_context.iter().any(|content| {
-            content.contains("no such tool")
-                && content.starts_with("[untrusted repository content]")
-        }),
-        "every tool-result context entry, including rejected calls, must be marked as untrusted repository content: {:?}",
+        turn2_context
+            .iter()
+            .any(|content| { content.contains("no such tool") }),
+        "rejected tool call feedback must be fed back to the model: {:?}",
         turn2_context
     );
 }

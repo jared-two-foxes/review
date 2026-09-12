@@ -41,6 +41,7 @@ fn openai_provider_aborts_generation_at_caller_deadline() {
             content: "This request intentionally has a delayed provider response.".into(),
         }],
         tools: vec![],
+        history: vec![],
     };
     let mut provider = OpenAiProvider::new(
         format!("http://{address}/v1/chat/completions"),

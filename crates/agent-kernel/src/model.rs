@@ -44,7 +44,7 @@ pub enum ConversationMessage {
     /// attempt)
     Assistant {
         content: Option<String>,
-        tool_call: Option<ToolCallRecord>,
+        tool_calls: Vec<ToolCallRecord>,
     },
     /// Tool result message - keyed to a specific tool call by ID
     Tool {

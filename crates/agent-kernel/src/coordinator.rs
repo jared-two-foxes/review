@@ -4,7 +4,10 @@ use tracing;
 
 use crate::application::{AgentApplication, CompletionDecision, ContextBlock};
 use crate::ledger::{InMemoryLedger, LedgerEvent, Limits};
-use crate::model::{CanonicalModelRequest, ModelAction, ModelProvider, UsageRecord};
+use crate::model::{
+    CanonicalModelRequest, ConversationMessage, ModelAction, ModelProvider, ToolCallRecord,
+    UsageRecord,
+};
 use crate::tools::ToolCatalog;
 
 const UNTRUSTED_REPOSITORY_CONTENT_MARKER: &str = "[untrusted repository content]";
@@ -67,7 +70,7 @@ where
             .wall_clock_budget
             .map(|budget| Instant::now() + budget);
 
-        let mut tool_result_contents: Vec<String> = Vec::new();
+        let mut history: Vec<ConversationMessage> = Vec::new();
         let mut usage = UsageRecord {
             input_tokens: 0,
             output_tokens: 0,
@@ -87,14 +90,29 @@ where
             // Build model request from app state + available tools.
             let instructions = self.app.build_system_instructions(&state);
             let mut context = self.app.build_context(&state);
-            context.extend(tool_result_contents.iter().map(|content| ContextBlock {
-                content: format!("{} {}", UNTRUSTED_REPOSITORY_CONTENT_MARKER, content),
-            }));
+
+            // Truncate history by complete turns when exceeding budget.
+            // A "turn" = one Assitant message + all following Tool/User messages
+            // until next Assistant message.
+            const MAX_HISTORY_MESSAGES: usize = 30;
+            while history.len() > MAX_HISTORY_MESSAGES {
+                let first_assistant_index = history
+                    .iter()
+                    .position(|msg| matches!(msg, ConversationMessage::Assistant { .. }))
+                    .unwrap_or(0);
+                let next_assistant_index = history[first_assistant_index + 1..]
+                    .iter()
+                    .position(|msg| matches!(msg, ConversationMessage::Assistant { .. }))
+                    .map(|i| i + first_assistant_index + 1)
+                    .unwrap_or(history.len());
+                history.drain(first_assistant_index..next_assistant_index);
+            }
+
             let model_request = CanonicalModelRequest {
                 instructions,
                 context,
                 tools: tool_descriptions.clone(),
-                history: vec![], // TODO: conversation history
+                history: history.clone(),
             };
 
             self.append_event(&session_id, turn, "", "kernel.model_started");
@@ -140,6 +158,37 @@ where
             tracing::info!(turn, "model completed");
             self.append_event(&session_id, turn, "", "kernel.model_completed");
 
+            // Record the assistant's actions in conversation history.
+            let tool_calls: Vec<ToolCallRecord> = response
+                .actions
+                .iter()
+                .filter_map(|action| match action {
+                    ModelAction::ToolCall {
+                        action_id,
+                        tool,
+                        arguments,
+                    } => Some(ToolCallRecord {
+                        id: action_id.clone(),
+                        name: tool.clone(),
+                        arguments: arguments.clone(),
+                    }),
+                    _ => None,
+                })
+                .collect();
+            let completion_content: Option<String> =
+                response.actions.iter().find_map(|action| match action {
+                    ModelAction::CompletionRequest { payload, .. } => {
+                        Some(serde_json::to_string(payload).unwrap_or_default())
+                    }
+                    _ => None,
+                });
+            if !tool_calls.is_empty() || completion_content.is_some() {
+                history.push(ConversationMessage::Assistant {
+                    content: completion_content,
+                    tool_calls,
+                });
+            }
+
             // Dispatch each action sequentially
             for action in response.actions {
                 match action {
@@ -159,7 +208,13 @@ where
                         let tool_impl = match self.catalog.get(&tool) {
                             Some(t) => t,
                             None => {
-                                tool_result_contents.push(format!("Tool call {} for \"{}\" was rejected: no such tool is available.", action_id, tool));
+                                history.push(ConversationMessage::Tool {
+                                    tool_call_id: action_id.clone(),
+                                    content: format!(
+                                        "{}, Tool call {} for \"{}\" was rejected: no such tool is available.",
+                                        UNTRUSTED_REPOSITORY_CONTENT_MARKER, action_id, tool
+                                    ),
+                                });
                                 tracing::warn!(turn, action_id, tool = %tool, "tool rejected: no such tool is available");
                                 self.append_event(
                                     &session_id,
@@ -172,10 +227,13 @@ where
                         };
 
                         if let Err(msg) = tool_impl.validate_arguments(&arguments) {
-                            tool_result_contents.push(format!(
-                                "Tool call {} for \"{}\" was rejected: invalid arguments: {}",
-                                action_id, tool, msg
-                            ));
+                            history.push(ConversationMessage::Tool {
+                                tool_call_id: action_id.clone(),
+                                content: format!(
+                                    "{}, Tool call {} for \"{}\" was rejected: invalid arguments: {}",
+                                    UNTRUSTED_REPOSITORY_CONTENT_MARKER, action_id, tool, msg
+                                ),
+                            });
                             tracing::warn!(turn, action_id, tool= %tool, "tool rejected: invalid arguments");
                             self.append_event_with_details(
                                 &session_id,
@@ -189,10 +247,13 @@ where
                         }
 
                         let result = tool_impl.execute(&arguments);
-                        tool_result_contents.push(format!(
-                            "Tool {} (action {}) {:?}: {}",
-                            tool, action_id, result.status, result.value
-                        ));
+                        history.push(ConversationMessage::Tool {
+                            tool_call_id: action_id.clone(),
+                            content: format!(
+                                "{} Tool call {} for \"{}\" completed with status {:?} and value: {}",
+                                UNTRUSTED_REPOSITORY_CONTENT_MARKER, action_id, tool, result.status, result.value
+                            ),
+                        });
 
                         tracing::info!(turn, action_id, tool= %tool, "tool completed");
                         let event = self.append_event(
@@ -217,6 +278,9 @@ where
                             Ok(c) => c,
                             Err(e) => {
                                 tracing::warn!(turn, action_id, "completion rejected: parse error");
+                                history.push(ConversationMessage::User {
+                                    content: format!("Completion rejected. Parse error: {:?}", e),
+                                });
                                 self.append_event_with_details(
                                     &session_id,
                                     turn,
@@ -246,10 +310,12 @@ where
                                 feedback_for_model, ..
                             } => {
                                 for block in &feedback_for_model {
-                                    tool_result_contents.push(format!(
-                                        "Completion rejected. Feedback: {}",
-                                        block.content
-                                    ));
+                                    history.push(ConversationMessage::User {
+                                        content: format!(
+                                            "Completion rejected. Feedback: {}",
+                                            block.content
+                                        ),
+                                    });
                                 }
                                 tracing::warn!(turn, action_id, "completion rejected: remediable");
                                 self.append_event(

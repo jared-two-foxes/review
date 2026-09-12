@@ -450,7 +450,7 @@ fn requirements_orientation_is_framed_as_data_for_analysis() {
     assert!(
         messages
             .iter()
-            .any(|m| m["role"] == "user"
+            .any(|m| m["role"] == "tool"
                 && m["content"].as_str().is_some_and(|c| c.contains("sha256:"))),
         "fed-back tool result must carry the observation identity: {messages:?}"
     );

@@ -1,6 +1,6 @@
 use agent_kernel::model::{
-    CanonicalModelRequest, CanonicalModelResponse, ModelAction, ModelError, ModelProvider,
-    UsageRecord,
+    CanonicalModelRequest, CanonicalModelResponse, ConversationMessage, ModelAction, ModelError,
+    ModelProvider, UsageRecord,
 };
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
@@ -105,6 +105,52 @@ impl OpenAiProvider {
                 "role": "user",
                 "content": context.content,
             }));
+        }
+        for msg in &request.history {
+            match msg {
+                ConversationMessage::Assistant {
+                    content,
+                    tool_calls,
+                } => {
+                    let calls_json: Vec<Value> = tool_calls
+                        .iter()
+                        .map(|call| {
+                            json!({
+                                "id": call.id,
+                                "type": "function",
+                                "function": {
+                                    "name": call.name,
+                                    "arguments": serde_json::to_string(&call.arguments).unwrap_or_default(),
+                                }
+                            })
+                        })
+                        .collect();
+                    let mut entry = json!({"role":"assistant"});
+                    if let Some(c) = content {
+                        entry["content"] = json!(c);
+                    }
+                    if !calls_json.is_empty() {
+                        entry["tool_calls"] = json!(calls_json);
+                    }
+                    messages.push(entry);
+                }
+                ConversationMessage::Tool {
+                    tool_call_id,
+                    content,
+                } => {
+                    messages.push(json!({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": content,
+                    }));
+                }
+                ConversationMessage::User { content } => {
+                    messages.push(json!({
+                        "role": "user",
+                        "content": content,
+                    }));
+                }
+            }
         }
         let tools: Vec<Value> = request
             .tools
