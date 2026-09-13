@@ -422,8 +422,8 @@ fn build_tool_event_details(
     if let Some(truncated) = result.get("truncated").and_then(|v| v.as_bool()) {
         summary["truncated"] = serde_json::Value::Bool(truncated);
     }
-    if let Some(completeness) = result.get("completeness").and_then(|v| v.as_str()) {
-        summary["completeness"] = serde_json::Value::String(completeness.into());
+    if let Some(completeness) = result.get("completeness").and_then(|v| v.as_bool()) {
+        summary["completeness"] = serde_json::Value::Bool(completeness);
     }
     if tool == "get_changed_files" {
         if let Some(changed_files) = result.get("files").and_then(|f| f.as_array()) {

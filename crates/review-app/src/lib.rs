@@ -200,6 +200,7 @@ pub struct ReviewState {
     requirements: Option<String>,
     changed_files: Vec<String>,
     inspected_paths: Vec<String>,
+    has_truncated_search: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -282,6 +283,7 @@ impl AgentApplication for ReviewApplication {
                     .or_else(|| request.requirements.clone()),
                 changed_files: vec![],
                 inspected_paths: vec![],
+                has_truncated_search: false,
             },
             requested_tools: vec![
                 "get_change_summary".into(),
@@ -436,6 +438,43 @@ impl AgentApplication for ReviewApplication {
             };
         }
 
+        // Gate 6: findings claiming absence cannot rely on truncated searches
+        if state.has_truncated_search {
+            let absence_phrases = [
+                "no occurrence",
+                "not found",
+                "does not exist",
+                "doesn't exist",
+                "no instance",
+                "absent",
+                "not present",
+                "no match",
+            ];
+            let absence_findings: Vec<String> = completion
+                .findings
+                .iter()
+                .filter(|f| {
+                    let message = f.message.to_lowercase();
+                    absence_phrases
+                        .iter()
+                        .any(|phrase| message.contains(phrase))
+                })
+                .map(|f| f.message.clone())
+                .collect();
+            if !absence_findings.is_empty() {
+                return CompletionDecision::RejectedRemediable {
+                    reason_codes: vec!["negative_evidence_from_truncated_search".into()],
+                    missing_requirements: vec![format!(
+                        "The following findings claim absence but a search was truncated (results incomplete): {}",
+                        absence_findings.join(", ")
+                    )],
+                    feedback_for_model: vec![InstructionBlock {
+                        content: "One or more searches returned incomplete results.  Findings claiming something does not exist are not supported by a truncated search.  Re-run the search with a more specific query or remove the absence claim.".into(),
+                    }],
+                };
+            }
+        }
+
         // All gates passed.
         *self.pending_completion.borrow_mut() = Some(completion.clone());
         *self.completion_accepted.borrow_mut() = true;
@@ -447,6 +486,7 @@ impl AgentApplication for ReviewApplication {
             "kernel.tool_completed" => {
                 let mut changed_files = state.changed_files.clone();
                 let mut inspected_paths = state.inspected_paths.clone();
+                let mut has_truncated_search = state.has_truncated_search;
 
                 // Parse the tool event details JSON to track what was inspected
                 if let Some(details) = &event.details {
@@ -468,6 +508,13 @@ impl AgentApplication for ReviewApplication {
                                 }
                             }
                         }
+                        if tool == "search_text" {
+                            if let Some(completeness) = info["completeness"].as_bool() {
+                                if !completeness && !has_truncated_search {
+                                    has_truncated_search = true;
+                                }
+                            }
+                        }
                     }
                 }
                 ReviewState {
@@ -476,6 +523,7 @@ impl AgentApplication for ReviewApplication {
                     requirements: state.requirements.clone(),
                     changed_files,
                     inspected_paths,
+                    has_truncated_search,
                 }
             }
             _ => state.clone(),

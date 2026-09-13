@@ -397,6 +397,12 @@ fn evaluates_each_seeded_repository_with_scripted_provider() {
         if let Some(api_key) = &live_api_key {
             let live_config = ReviewConfig {
                 api_key: api_key.clone(),
+                base_url: std::env::var("REVIEW_BASE_URL")
+                    .unwrap_or_else(|_| "https://api.openai.com/v1/chat/completions".into()),
+                model: std::env::var("REVIEW_MODEL")
+                    .unwrap_or_else(|_| "gpt-4o".into()),
+                max_turns: 15,
+                wall_clock_budget: Some(std::time::Duration::from_secs(600)),
                 ..ReviewConfig::default()
             };
             let (live_result, live_events, setup_error) = run_review(&request, &live_config);
