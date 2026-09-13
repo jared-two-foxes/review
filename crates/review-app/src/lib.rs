@@ -198,6 +198,8 @@ pub struct ReviewState {
     inspected: bool,
     findings: Vec<Finding>,
     requirements: Option<String>,
+    changed_files: Vec<String>,
+    inspected_paths: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -278,6 +280,8 @@ impl AgentApplication for ReviewApplication {
                     .requirements
                     .clone()
                     .or_else(|| request.requirements.clone()),
+                changed_files: vec![],
+                inspected_paths: vec![],
             },
             requested_tools: vec![
                 "get_change_summary".into(),
@@ -323,28 +327,157 @@ impl AgentApplication for ReviewApplication {
         state: &Self::State,
         completion: &Self::Completion,
     ) -> CompletionDecision {
+        // Gate 1: must have inspected the change.
         if !state.inspected {
-            CompletionDecision::RejectedRemediable {
+            return CompletionDecision::RejectedRemediable {
                 reason_codes: vec!["change_not_inspected".into()],
                 missing_requirements: vec!["The change has not been inspected".into()],
                 feedback_for_model: vec![InstructionBlock {
                     content: "You must call the get_change_summary tool before completing.".into(),
                 }],
-            }
-        } else {
-            *self.pending_completion.borrow_mut() = Some(completion.clone());
-            *self.completion_accepted.borrow_mut() = true;
-            CompletionDecision::Accepted
+            };
         }
+
+        // Gate 2: all change files must have been inspected by a read tool.
+        let uncovered: Vec<String> = state
+            .changed_files
+            .iter()
+            .filter(|path| !state.inspected_paths.contains(path))
+            .cloned()
+            .collect();
+
+        if !uncovered.is_empty() {
+            return CompletionDecision::RejectedRemediable {
+                reason_codes: vec!["change_not_fully_inspected".into()],
+                missing_requirements: vec![format!(
+                    "The following changed files have not been inspected: {}",
+                    uncovered.join(", ")
+                )],
+                feedback_for_model: vec![InstructionBlock {
+                    content: format!(
+                        "You must read all changed files before completing. The following files have not been inspected: {}",
+                        uncovered.join(", ")
+                    ),
+                }],
+            };
+        }
+
+        // gate 3: if requirements were provided, the model must reference them.
+        if let Some(reqs) = &state.requirements {
+            let req_words: Vec<&str> = reqs.split_whitespace().filter(|w| w.len() > 5).collect();
+            let findings_text: String = completion
+                .findings
+                .iter()
+                .map(|f| {
+                    format!(
+                        "{} {}",
+                        f.message,
+                        f.recommendation.as_deref().unwrap_or("")
+                    )
+                })
+                .collect();
+            let reference_requirements = req_words
+                .iter()
+                .any(|word| findings_text.to_lowercase().contains(&word.to_lowercase()));
+            if !reference_requirements {
+                return CompletionDecision::RejectedRemediable {
+                    reason_codes: vec!["requirements_not_accessed".into()],
+                    missing_requirements: vec![
+                        "The provided requirements have not been assessed".into()
+                    ],
+                    feedback_for_model: vec![InstructionBlock {
+                        content: "Your findings must reference the provided requirements. Include specific references to the requirements in your findings.".into(),
+                    }],
+                };
+            }
+        }
+
+        // Gate 4: findings must reference inspected paths.
+        let unsupported: Vec<String> = completion
+            .findings
+            .iter()
+            .filter_map(|f| f.path.as_ref())
+            .filter(|path| !state.inspected_paths.contains(path))
+            .cloned()
+            .collect();
+        if !unsupported.is_empty() {
+            return CompletionDecision::RejectedRemediable {
+                reason_codes: vec!["finding_not_evidence_backed".into()],
+                missing_requirements: vec![format!(
+                    "The following findings paths where not inspected by any tool: {}",
+                    unsupported.join(", ")
+                )],
+                feedback_for_model: vec![InstructionBlock {
+                    content: format!(
+                        "Your findings must only reference files that have been inspected. The following files have not been inspected: {}",
+                        unsupported.join(", ")
+                    ),
+                }],
+            };
+        }
+
+        // Gate 5: severity must be valid
+        let invalid_severity: Vec<String> = completion
+            .findings
+            .iter()
+            .filter(|f| !matches!(f.severity.as_str(), "high" | "medium" | "low"))
+            .map(|f| f.severity.clone())
+            .collect();
+        if !invalid_severity.is_empty() {
+            return CompletionDecision::RejectedRemediable {
+                reason_codes: vec!["invalid_severity".into()],
+                missing_requirements: vec![format!(
+                    "Findings with invalid severity: {} (must be high, medium, or low)",
+                    invalid_severity.join(", ")
+                )],
+                feedback_for_model: vec![InstructionBlock {
+                    content: format!("Your findings must have a severity of high, medium, or low."),
+                }],
+            };
+        }
+
+        // All gates passed.
+        *self.pending_completion.borrow_mut() = Some(completion.clone());
+        *self.completion_accepted.borrow_mut() = true;
+        CompletionDecision::Accepted
     }
 
     fn reduce_event(&self, state: &Self::State, event: &LedgerEvent) -> Self::State {
         match event.event_type.as_str() {
-            "kernel.tool_completed" => ReviewState {
-                inspected: true,
-                findings: state.findings.clone(),
-                requirements: state.requirements.clone(),
-            },
+            "kernel.tool_completed" => {
+                let mut changed_files = state.changed_files.clone();
+                let mut inspected_paths = state.inspected_paths.clone();
+
+                // Parse the tool event details JSON to track what was inspected
+                if let Some(details) = &event.details {
+                    if let Ok(info) = serde_json::from_str::<serde_json::Value>(details) {
+                        let tool = info["tool"].as_str().unwrap_or("");
+                        if tool == "get_changed_files" {
+                            if let Some(files) = info["files"].as_array() {
+                                for path in files.iter().filter_map(|f| f.as_str()) {
+                                    if !changed_files.contains(&path.to_string()) {
+                                        changed_files.push(path.to_string());
+                                    }
+                                }
+                            }
+                        }
+                        if tool == "read_file" || tool == "read_diff" || tool == "list_directory" {
+                            if let Some(path) = info["path"].as_str() {
+                                if !inspected_paths.contains(&path.to_string()) {
+                                    inspected_paths.push(path.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                ReviewState {
+                    inspected: true,
+                    findings: state.findings.clone(),
+                    requirements: state.requirements.clone(),
+                    changed_files,
+                    inspected_paths,
+                }
+            }
             _ => state.clone(),
         }
     }
@@ -358,10 +491,23 @@ impl AgentApplication for ReviewApplication {
         let accepted = *self.completion_accepted.borrow();
         let pending = self.pending_completion.borrow();
         let empty_binding = vec![];
-        let findings = pending
+        let raw_findings = pending
             .as_ref()
             .map(|c| &c.findings)
             .unwrap_or(&empty_binding);
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let findings: Vec<&Finding> = raw_findings
+            .iter()
+            .filter(|f| {
+                let fingerprint = format!(
+                    "{}:{}:{}",
+                    f.path.as_deref().unwrap_or("").to_lowercase(),
+                    f.line.unwrap_or(0),
+                    f.message.to_lowercase()
+                );
+                seen.insert(fingerprint)
+            })
+            .collect();
         let has_blocking = findings.iter().any(|f| f.blocking);
         let status = if !accepted {
             ReviewStatus::Indeterminate

@@ -256,11 +256,15 @@ where
                         });
 
                         tracing::info!(turn, action_id, tool= %tool, "tool completed");
-                        let event = self.append_event(
+
+                        let tool_details =
+                            build_tool_event_details(&tool, &arguments, &result.value);
+                        let event = self.append_event_with_details(
                             &session_id,
                             turn,
                             &action_id,
                             "kernel.tool_completed",
+                            tool_details,
                         );
 
                         state = self.app.reduce_event(&state, &event);
@@ -398,4 +402,37 @@ where
     pub fn ledger(&self) -> &InMemoryLedger {
         &self.ledger
     }
+}
+
+/// Build a JSON summary of a tall call fo rthe event details field.
+/// This lets 'reduce_event` reconstruct what was inspected without access to
+/// the conversation history.
+fn build_tool_event_details(
+    tool: &str,
+    arguments: &serde_json::Value,
+    result: &serde_json::Value,
+) -> Option<String> {
+    let mut summary = serde_json::json!({"tool": tool});
+    if let Some(path) = arguments.get("path").and_then(|v| v.as_str()) {
+        summary["path"] = serde_json::Value::String(path.into());
+    }
+    if let Some(query) = arguments.get("query").and_then(|v| v.as_str()) {
+        summary["query"] = serde_json::Value::String(query.into());
+    }
+    if let Some(truncated) = result.get("truncated").and_then(|v| v.as_bool()) {
+        summary["truncated"] = serde_json::Value::Bool(truncated);
+    }
+    if let Some(completeness) = result.get("completeness").and_then(|v| v.as_str()) {
+        summary["completeness"] = serde_json::Value::String(completeness.into());
+    }
+    if tool == "get_changed_files" {
+        if let Some(changed_files) = result.get("files").and_then(|f| f.as_array()) {
+            let paths: Vec<&str> = changed_files
+                .iter()
+                .filter_map(|f| f["path"].as_str())
+                .collect();
+            summary["changed_files"] = serde_json::json!(paths);
+        }
+    }
+    Some(summary.to_string())
 }

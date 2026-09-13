@@ -54,11 +54,36 @@ impl ModelProvider for ScriptedModelProvider {
     }
 }
 
+struct MockReadFileTool;
+
+impl agent_kernel::tools::Tool for MockReadFileTool {
+    fn name(&self) -> &str {
+        "read_file"
+    }
+    fn description(&self) -> agent_kernel::model::ToolDescription {
+        agent_kernel::model::ToolDescription {
+            name: "read_file".into(),
+            description: "Read a file".into(),
+            input_schema: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}),
+        }
+    }
+    fn validate_arguments(&self, _arguments: &serde_json::Value) -> Result<(), String> {
+        Ok(())
+    }
+    fn execute(&self, _arguments: &serde_json::Value) -> agent_kernel::tools::ToolResult {
+        agent_kernel::tools::ToolResult {
+            status: agent_kernel::tools::ToolStatus::Succeeded,
+            value: json!({"content": "fn main() { setup(); }", "truncated": false}),
+        }
+    }
+}
+
 // ── Helper ──
 fn run_review(responses: Vec<CanonicalModelResponse>) -> ReviewResult {
     let provider = ScriptedModelProvider::new(responses);
     let mut catalog = ToolCatalog::new();
     catalog.register(Box::new(ReadChangeTool));
+    catalog.register(Box::new(MockReadFileTool));
     let limits = Limits {
         max_turns: 10,
         max_tool_calls: 10,
@@ -151,7 +176,7 @@ fn blocking_finding_produces_changes_requested() {
                 action_id: "act-2".into(),
                 payload: json!({
                     "findings": [{"blocking": true, "message": "bug
-                found"}]
+                found", "severity": "high"}]
                 }),
             }],
             usage: None,
@@ -298,6 +323,14 @@ fn accepted_completion_findings_are_included_in_review_result() {
             usage: None,
         },
         CanonicalModelResponse {
+            actions: vec![ModelAction::ToolCall {
+                action_id: "act-1b".into(),
+                tool: "read_file".into(),
+                arguments: json!({"path": "src/main.rs"}),
+            }],
+            usage: None,
+        },
+        CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
                 action_id: "act-2".into(),
                 payload: json!({
@@ -370,7 +403,7 @@ fn requirements_orientation_is_framed_as_data_for_analysis() {
             let response = if turn == 0 {
                 r#"{"choices":[{"message":{"tool_calls":[{"id":"act-1","function":{"name":"get_change_summary","arguments":"{}"}}]}}],"usage":{}}"#
             } else {
-                r#"{"choices":[{"message":{"content":"{\"findings\":[{\"blocking\":false,\"message\":\"ok\",\"severity\":\"low\"}]}"}}],"usage":{}}"#
+                r#"{"choices":[{"message":{"content":"{\"findings\":[{\"blocking\":false,\"message\":\"The endpoint correctly handles malformed JSON input.\",\"severity\":\"low\"}]}"}}],"usage":{}}"#
             };
             let reply = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",

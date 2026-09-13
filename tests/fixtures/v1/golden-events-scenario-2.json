@@ -45,7 +45,8 @@
     "session_id": "ses-001",
     "turn": 2,
     "action_id": "act-2",
-    "execution_id": ""
+    "execution_id": "",
+    "details": "{\"tool\":\"get_change_summary\"}"
   },
   {
     "event_type": "kernel.model_started",

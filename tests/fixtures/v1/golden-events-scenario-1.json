@@ -21,7 +21,8 @@
     "session_id": "ses-001",
     "turn": 1,
     "action_id": "act-1",
-    "execution_id": ""
+    "execution_id": "",
+    "details": "{\"tool\":\"get_change_summary\"}"
   },
   {
     "event_type": "kernel.model_started",
