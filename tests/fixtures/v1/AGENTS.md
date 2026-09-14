@@ -1,0 +1,14 @@
+# AGENTS.md
+
+## Module summary
+`tests/fixtures/v1` contains golden event and result fixtures for scripted coordinator scenarios.
+
+## Contents
+_No child subfolders._
+
+## Key files
+- `golden-events-scenario-*.json` capture coordinator ledger output.
+- `golden-result-scenario-*.json` capture final review results for the same scenarios.
+
+## Subsystem interaction
+`tests/v1_golden.rs` and `src/bin/regenerate-goldens.rs` use these artifacts together.
