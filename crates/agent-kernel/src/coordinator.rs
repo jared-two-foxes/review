@@ -33,7 +33,7 @@ where
             provider,
             id_gen,
             catalog,
-            ledger: InMemoryLedger::new(),
+            ledger: InMemoryLedger::with_path(limits.ledger_path.as_ref()),
             limits,
         }
     }
@@ -59,6 +59,10 @@ where
             .iter()
             .filter_map(|name| self.catalog.get(name).map(|t| t.description()))
             .collect();
+
+        let mut seen_tool_calls: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        let mut repeated_action_count: u32 = 0;
 
         // -- Budget counter --
         let mut turn = 0u32;
@@ -247,6 +251,30 @@ where
                         }
 
                         let result = tool_impl.execute(&arguments);
+                        let call_key = (
+                            tool.clone(),
+                            serde_json::to_string(&arguments).unwrap_or_default(),
+                        );
+                        if !seen_tool_calls.insert(call_key) {
+                            repeated_action_count += 1;
+                            if repeated_action_count >= self.limits.max_repeated_actions {
+                                tracing::warn!(turn, tool= %tool, repeated = repeated_action_count, "session stalled: repeated identical tool calls");
+                                self.append_event_with_details(
+                                    &session_id,
+                                    turn,
+                                    &action_id,
+                                    "kernel.session_stalled",
+                                    Some(format!(
+                                        "repeated identical call to \"{}\" {} times",
+                                        tool, repeated_action_count
+                                    )),
+                                );
+                                return (
+                                    self.app.build_terminal_result(&state, &usage),
+                                    self.ledger.events().to_vec(),
+                                );
+                            }
+                        }
                         history.push(ConversationMessage::Tool {
                             tool_call_id: action_id.clone(),
                             content: format!(
@@ -395,6 +423,7 @@ where
             action_id: action_id.into(),
             execution_id,
             details,
+            prev_hash: None,
         })
     }
 

@@ -89,6 +89,8 @@ fn run_review(responses: Vec<CanonicalModelResponse>) -> ReviewResult {
         max_tool_calls: 10,
         max_completion_attempts: 10,
         wall_clock_budget: None,
+        ledger_path: None,
+        max_repeated_actions: 3,
     };
     let clock = FixedClock::new("2025-01-01T00:00:00Z");
     let app_id_gen = SequenceIdGenerator::new(["rev-001"]);
@@ -212,6 +214,8 @@ fn review_application_constructible_with_production_clock_and_id_generator() {
         max_tool_calls: 10,
         max_completion_attempts: 10,
         wall_clock_budget: None,
+        ledger_path: None,
+        max_repeated_actions: 3,
     };
     let app = ReviewApplication::new_with_sources(SystemClock::new(), RandomIdGenerator::new());
     let coordinator =
@@ -432,6 +436,8 @@ fn requirements_orientation_is_framed_as_data_for_analysis() {
             max_tool_calls: 10,
             max_completion_attempts: 10,
             wall_clock_budget: None,
+            ledger_path: None,
+            max_repeated_actions: 3,
         },
     );
     server.join().expect("model server");

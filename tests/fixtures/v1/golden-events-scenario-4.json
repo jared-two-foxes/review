@@ -13,7 +13,8 @@
     "session_id": "ses-001",
     "turn": 1,
     "action_id": "",
-    "execution_id": ""
+    "execution_id": "",
+    "prev_hash": "sha256:a1f00f0632a100a323aca85166f1d22ad43a8873de5c525f78c056124ac21e9d"
   },
   {
     "event_type": "kernel.action_rejected",
@@ -22,6 +23,7 @@
     "turn": 1,
     "action_id": "act-1",
     "execution_id": "",
-    "details": "invalid arguments: invalid arguments: \"not-an-object\" is not of type \"object\""
+    "details": "invalid arguments: invalid arguments: \"not-an-object\" is not of type \"object\"",
+    "prev_hash": "sha256:2969756ab21cc6e832b7bf1d1e07425b6a1a9ee4e49ed2a85fd428fb285bbe65"
   }
 ]

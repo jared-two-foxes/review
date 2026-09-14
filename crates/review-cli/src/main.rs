@@ -18,6 +18,7 @@ fn main() {
     let mut head_ref: Option<String> = None;
     let mut requirements_path: Option<String> = None;
     let mut uncommitted = false;
+    let mut ledger_path: Option<String> = None;
 
     let mut i = 1; // Skip program name
     while i < args.len() {
@@ -77,6 +78,10 @@ fn main() {
             }
             "--uncommitted" => {
                 uncommitted = true;
+            }
+            "--ledger" => {
+                ledger_path = Some(flag_value(&args, i, "--ledger"));
+                i += 1;
             }
             _ => {}
         }
@@ -152,6 +157,8 @@ fn main() {
         max_tool_calls: 40,
         max_completion_attempts: 3,
         wall_clock_budget: Some(Duration::from_secs(wall_clock_budget_secs)),
+        ledger_path: ledger_path.map(|p| std::path::PathBuf::from(p)),
+        max_repeated_actions: 3,
     };
     let (result, events, setup_err) = review_app::run_review(&request, &config);
 

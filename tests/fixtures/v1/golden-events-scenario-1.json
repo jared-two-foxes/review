@@ -13,7 +13,8 @@
     "session_id": "ses-001",
     "turn": 1,
     "action_id": "",
-    "execution_id": ""
+    "execution_id": "",
+    "prev_hash": "sha256:a1f00f0632a100a323aca85166f1d22ad43a8873de5c525f78c056124ac21e9d"
   },
   {
     "event_type": "kernel.tool_completed",
@@ -22,7 +23,8 @@
     "turn": 1,
     "action_id": "act-1",
     "execution_id": "",
-    "details": "{\"tool\":\"get_change_summary\"}"
+    "details": "{\"tool\":\"get_change_summary\"}",
+    "prev_hash": "sha256:2969756ab21cc6e832b7bf1d1e07425b6a1a9ee4e49ed2a85fd428fb285bbe65"
   },
   {
     "event_type": "kernel.model_started",
@@ -30,7 +32,8 @@
     "session_id": "ses-001",
     "turn": 2,
     "action_id": "",
-    "execution_id": ""
+    "execution_id": "",
+    "prev_hash": "sha256:4b989b82d32226d5458bba986f5b00603ab381591eaf2fed41aa89ab2f810bab"
   },
   {
     "event_type": "kernel.model_completed",
@@ -38,7 +41,8 @@
     "session_id": "ses-001",
     "turn": 2,
     "action_id": "",
-    "execution_id": ""
+    "execution_id": "",
+    "prev_hash": "sha256:f96d8b33d57f9624cb90f2596f6ed65f91ce60df1174e50037f1b947735ffa33"
   },
   {
     "event_type": "kernel.completion_accepted",
@@ -46,6 +50,7 @@
     "session_id": "ses-001",
     "turn": 2,
     "action_id": "act-2",
-    "execution_id": ""
+    "execution_id": "",
+    "prev_hash": "sha256:bb0ca5398c4b19656565bd7aae7c958647270d17d53b394140c17cf9305b211a"
   }
 ]

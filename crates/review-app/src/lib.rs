@@ -37,6 +37,8 @@ pub struct ReviewConfig {
     pub max_tool_calls: u32,
     pub max_completion_attempts: u32,
     pub wall_clock_budget: Option<Duration>,
+    pub ledger_path: Option<std::path::PathBuf>,
+    pub max_repeated_actions: u32,
 }
 
 impl Default for ReviewConfig {
@@ -49,6 +51,8 @@ impl Default for ReviewConfig {
             max_tool_calls: 10,
             max_completion_attempts: 3,
             wall_clock_budget: Some(Duration::from_secs(60)),
+            ledger_path: None,
+            max_repeated_actions: 3,
         }
     }
 }
@@ -151,6 +155,8 @@ pub fn run_review_with_provider<P: ModelProvider>(
         max_tool_calls: config.max_tool_calls,
         max_completion_attempts: config.max_completion_attempts,
         wall_clock_budget: config.wall_clock_budget,
+        ledger_path: config.ledger_path.clone(),
+        max_repeated_actions: config.max_repeated_actions,
     };
     let coordinator =
         SessionCoordinator::new(app, provider, RandomIdGenerator::new(), catalog, limits);

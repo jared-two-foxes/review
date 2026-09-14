@@ -13,7 +13,8 @@
     "session_id": "ses-001",
     "turn": 1,
     "action_id": "",
-    "execution_id": "exec-002"
+    "execution_id": "exec-002",
+    "prev_hash": "sha256:a1f00f0632a100a323aca85166f1d22ad43a8873de5c525f78c056124ac21e9d"
   },
   {
     "event_type": "kernel.completion_rejected",
@@ -21,7 +22,8 @@
     "session_id": "ses-001",
     "turn": 1,
     "action_id": "act-1",
-    "execution_id": "exec-003"
+    "execution_id": "exec-003",
+    "prev_hash": "sha256:cd60e08224c059c6a673b1656d5680b83063c6b8e1d6bc50024b6fd13d400218"
   },
   {
     "event_type": "kernel.model_started",
@@ -29,7 +31,8 @@
     "session_id": "ses-001",
     "turn": 2,
     "action_id": "",
-    "execution_id": ""
+    "execution_id": "",
+    "prev_hash": "sha256:4fc92adbab6711ab57092986449e5076532d7c20c69377a63038c9004728df6c"
   },
   {
     "event_type": "kernel.model_completed",
@@ -37,7 +40,8 @@
     "session_id": "ses-001",
     "turn": 2,
     "action_id": "",
-    "execution_id": ""
+    "execution_id": "",
+    "prev_hash": "sha256:404b25c8d4331aa26c4ba76b784a79b3e7d07ad1aebb35f4380e0fb2a24effb3"
   },
   {
     "event_type": "kernel.tool_completed",
@@ -46,7 +50,8 @@
     "turn": 2,
     "action_id": "act-2",
     "execution_id": "",
-    "details": "{\"tool\":\"get_change_summary\"}"
+    "details": "{\"tool\":\"get_change_summary\"}",
+    "prev_hash": "sha256:8d1a455797a040bf7fc91c7ba747f581c2edd9e8de8d39d133c6347007ab96d7"
   },
   {
     "event_type": "kernel.model_started",
@@ -54,7 +59,8 @@
     "session_id": "ses-001",
     "turn": 3,
     "action_id": "",
-    "execution_id": ""
+    "execution_id": "",
+    "prev_hash": "sha256:8228c14fe6c3943d6564275e062721326c14461dd6b0e4bfcfc154be719c7f35"
   },
   {
     "event_type": "kernel.model_completed",
@@ -62,7 +68,8 @@
     "session_id": "ses-001",
     "turn": 3,
     "action_id": "",
-    "execution_id": ""
+    "execution_id": "",
+    "prev_hash": "sha256:473bf65a803d7880d63661440a8f10a390f9cb9fbbc0a74d06d6be871a8338e8"
   },
   {
     "event_type": "kernel.completion_accepted",
@@ -70,6 +77,7 @@
     "session_id": "ses-001",
     "turn": 3,
     "action_id": "act-3",
-    "execution_id": ""
+    "execution_id": "",
+    "prev_hash": "sha256:b0fd1285d4836fd9c635c5c0947b66cb5d2c9618562ad1b74ccb01d85a6a6c89"
   }
 ]

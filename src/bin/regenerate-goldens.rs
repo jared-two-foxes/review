@@ -69,6 +69,8 @@ fn build_limits(max_turns: u32) -> Limits {
         max_tool_calls: 10,
         max_completion_attempts: 10,
         wall_clock_budget: None,
+        ledger_path: None,
+        max_repeated_actions: 3,
     }
 }
 
