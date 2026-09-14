@@ -8,3 +8,6 @@ _No child subfolders._
 
 ## Key files
 - `production_sources.rs` checks the production clock and identifier behavior.
+
+## Find existing code
+Use `production_sources.rs` to see the expected production semantics for time and ID generation.

@@ -9,5 +9,8 @@ _No child subfolders._
 ## Key modules
 - `lib.rs` defines the `Clock` and `IdGenerator` traits plus fixed/system clock and sequential/random ID implementations.
 
-## Subsystem interaction
-Deterministic tests use the fixed and sequence implementations; production paths use the system clock and UUID generator.
+## Find existing code
+All production and deterministic protocol primitives in this crate live in `lib.rs`.
+
+## Add new implementations
+Add new sources only if callers need them across crate boundaries; otherwise keep test-specific fakes near their tests.

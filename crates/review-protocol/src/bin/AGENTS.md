@@ -9,8 +9,11 @@ _No child subfolders._
 ## Key files
 - `generate-schemas.rs` writes the current protocol schemas for check-in under `schemas/review/`.
 
-## Subsystem interaction
-This binary depends on the library module in the parent directory and is usually run when protocol structs or validation rules change.
+## Find existing code
+Start with `generate-schemas.rs` when a protocol change requires regenerated checked-in schemas.
+
+## Add new implementations
+Keep this directory for maintenance binaries that operate on protocol artifacts rather than runtime review behavior.
 
 ## Usage example
 ```bash

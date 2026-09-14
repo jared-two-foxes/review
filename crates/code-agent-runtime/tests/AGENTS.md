@@ -12,5 +12,8 @@ _No child subfolders._
 - `provider.rs` and `provider_deadline.rs` cover model-provider adaptation.
 - `repo_ops.rs` and `observation_identity.rs` cover repository helpers and snapshot identity.
 
-## Subsystem interaction
-These tests validate the runtime surface that `review-app` exposes to the kernel.
+## Find existing code
+Look for tests named after the production module or tool you are changing; this directory already mirrors the main runtime surfaces closely.
+
+## Add new implementations
+Add runtime-facing assertions here whenever tool outputs, repository traversal, or provider behavior changes.

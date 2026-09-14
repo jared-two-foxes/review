@@ -9,5 +9,8 @@ _No child subfolders._
 ## Key modules
 - `lib.rs` defines exit codes, request file reading, JSON stdout/stderr helpers, and strict JSON parsing.
 
-## Subsystem interaction
-The helpers keep CLI process behavior small and predictable so higher layers can focus on review logic.
+## Find existing code
+Everything in this crate lives in `lib.rs`; read it first before adding overlapping helpers.
+
+## Add new implementations
+Keep this directory small and focused on reusable process-level helpers rather than product logic.

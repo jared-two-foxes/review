@@ -11,5 +11,8 @@ _No child subfolders._
 - `demo_args_composition.rs` and `smoke_composition.rs` cover CLI composition flows.
 - `live_model.rs` covers the live-provider integration seam.
 
-## Subsystem interaction
-These tests validate the CLI shell without duplicating lower-level runtime and kernel tests.
+## Find existing code
+Pick the test file that matches the behavior you are changing: validation, composition, smoke flow, or live-model handoff.
+
+## Add new implementations
+Add or update tests here whenever flag parsing, request construction, exit codes, or CLI validation behavior changes.
