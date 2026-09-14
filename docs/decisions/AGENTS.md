@@ -7,11 +7,8 @@
 _No child subfolders._
 
 ## Key files
-- `0001-v0-process-boundary.md` records the greenfield/subprocess-only architecture rule.
-- `0001-v0-process-contract.md` records the stable CLI exit-code contract and V0 boundary.
-
-## Naming note
-The current ADR filenames both begin with the `0001` prefix; refer to the full filename when citing them.
+- The boundary ADR in this directory records the greenfield/subprocess-only architecture rule.
+- The process-contract ADR in this directory records the stable CLI exit-code contract and V0 boundary.
 
 ## Subsystem interaction
 These ADRs are reference points for protocol, CLI, and integration changes elsewhere in the workspace.
