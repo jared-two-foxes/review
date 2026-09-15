@@ -75,6 +75,8 @@ fn build_limits(max_turns: u32) -> Limits {
         wall_clock_budget: None,
         ledger_path: None,
         max_repeated_actions: 3,
+        max_input_tokens: None,
+        max_cost_usd: None,
     }
 }
 

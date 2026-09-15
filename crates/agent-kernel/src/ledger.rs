@@ -84,4 +84,6 @@ pub struct Limits {
     pub wall_clock_budget: Option<Duration>,
     pub ledger_path: Option<PathBuf>,
     pub max_repeated_actions: u32,
+    pub max_input_tokens: Option<u64>,
+    pub max_cost_usd: Option<f64>,
 }

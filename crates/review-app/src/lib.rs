@@ -39,6 +39,8 @@ pub struct ReviewConfig {
     pub wall_clock_budget: Option<Duration>,
     pub ledger_path: Option<std::path::PathBuf>,
     pub max_repeated_actions: u32,
+    pub max_input_tokens: Option<u64>,
+    pub max_cost_usd: Option<f64>,
 }
 
 impl Default for ReviewConfig {
@@ -53,6 +55,8 @@ impl Default for ReviewConfig {
             wall_clock_budget: Some(Duration::from_secs(60)),
             ledger_path: None,
             max_repeated_actions: 3,
+            max_input_tokens: None,
+            max_cost_usd: None,
         }
     }
 }
@@ -157,6 +161,8 @@ pub fn run_review_with_provider<P: ModelProvider>(
         wall_clock_budget: config.wall_clock_budget,
         ledger_path: config.ledger_path.clone(),
         max_repeated_actions: config.max_repeated_actions,
+        max_input_tokens: config.max_input_tokens,
+        max_cost_usd: config.max_cost_usd,
     };
     let coordinator =
         SessionCoordinator::new(app, provider, RandomIdGenerator::new(), catalog, limits);
@@ -439,7 +445,8 @@ impl AgentApplication for ReviewApplication {
                     invalid_severity.join(", ")
                 )],
                 feedback_for_model: vec![InstructionBlock {
-                    content: format!("Your findings must have a severity of high, medium, or low."),
+                    content: "Your findings must have a severity of high, medium, or low."
+                        .to_string(),
                 }],
             };
         }
@@ -495,32 +502,31 @@ impl AgentApplication for ReviewApplication {
                 let mut has_truncated_search = state.has_truncated_search;
 
                 // Parse the tool event details JSON to track what was inspected
-                if let Some(details) = &event.details {
-                    if let Ok(info) = serde_json::from_str::<serde_json::Value>(details) {
-                        let tool = info["tool"].as_str().unwrap_or("");
-                        if tool == "get_changed_files" {
-                            if let Some(files) = info["files"].as_array() {
-                                for path in files.iter().filter_map(|f| f.as_str()) {
-                                    if !changed_files.contains(&path.to_string()) {
-                                        changed_files.push(path.to_string());
-                                    }
-                                }
+                if let Some(details) = &event.details
+                    && let Ok(info) = serde_json::from_str::<serde_json::Value>(details)
+                {
+                    let tool = info["tool"].as_str().unwrap_or("");
+                    if tool == "get_changed_files"
+                        && let Some(files) = info["files"].as_array()
+                    {
+                        for path in files.iter().filter_map(|f| f.as_str()) {
+                            if !changed_files.contains(&path.to_string()) {
+                                changed_files.push(path.to_string());
                             }
                         }
-                        if tool == "read_file" || tool == "read_diff" || tool == "list_directory" {
-                            if let Some(path) = info["path"].as_str() {
-                                if !inspected_paths.contains(&path.to_string()) {
-                                    inspected_paths.push(path.to_string());
-                                }
-                            }
-                        }
-                        if tool == "search_text" {
-                            if let Some(completeness) = info["completeness"].as_bool() {
-                                if !completeness && !has_truncated_search {
-                                    has_truncated_search = true;
-                                }
-                            }
-                        }
+                    }
+                    if (tool == "read_file" || tool == "read_diff" || tool == "list_directory")
+                        && let Some(path) = info["path"].as_str()
+                        && !inspected_paths.contains(&path.to_string())
+                    {
+                        inspected_paths.push(path.to_string());
+                    }
+                    if tool == "search_text"
+                        && let Some(completeness) = info["completeness"].as_bool()
+                        && !completeness
+                        && !has_truncated_search
+                    {
+                        has_truncated_search = true;
                     }
                 }
                 ReviewState {

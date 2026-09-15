@@ -2,7 +2,7 @@ use agent_protocol::IdGenerator;
 use std::time::Instant;
 use tracing;
 
-use crate::application::{AgentApplication, CompletionDecision, ContextBlock};
+use crate::application::{AgentApplication, CompletionDecision};
 use crate::ledger::{InMemoryLedger, LedgerEvent, Limits};
 use crate::model::{
     CanonicalModelRequest, ConversationMessage, ModelAction, ModelProvider, ToolCallRecord,
@@ -93,7 +93,7 @@ where
 
             // Build model request from app state + available tools.
             let instructions = self.app.build_system_instructions(&state);
-            let mut context = self.app.build_context(&state);
+            let context = self.app.build_context(&state);
 
             // Truncate history by complete turns when exceeding budget.
             // A "turn" = one Assitant message + all following Tool/User messages
@@ -157,6 +157,34 @@ where
                         (None, cost) => cost,
                         (total, None) => total,
                     };
+            }
+
+            let mut exhausted_budgets = Vec::new();
+            if self
+                .limits
+                .max_input_tokens
+                .is_some_and(|limit| usage.input_tokens > limit)
+            {
+                exhausted_budgets.push("input_tokens exceeded max_input_tokens");
+            }
+            if let (Some(limit), Some(cost)) = (self.limits.max_cost_usd, usage.estimated_cost_usd)
+            {
+                if cost > limit {
+                    exhausted_budgets.push("estimated_cost_usd exceeded max_cost_usd");
+                }
+            }
+            if !exhausted_budgets.is_empty() {
+                self.append_event_with_details(
+                    &session_id,
+                    turn,
+                    "",
+                    "kernel.session_budget_exhausted",
+                    Some(exhausted_budgets.join("; ")),
+                );
+                return (
+                    self.app.build_terminal_result(&state, &usage),
+                    self.ledger.events().to_vec(),
+                );
             }
 
             tracing::info!(turn, "model completed");

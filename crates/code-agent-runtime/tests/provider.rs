@@ -398,6 +398,8 @@ mod coordinator_failure_tests {
             wall_clock_budget: None,
             ledger_path: None,
             max_repeated_actions: 2,
+            max_input_tokens: None,
+            max_cost_usd: None,
         };
         let coordinator = SessionCoordinator::new(
             App,

@@ -835,12 +835,12 @@ fn search_index(
         if entry.mode & 0o170000 == 0o120000 {
             continue;
         }
-        if let Ok(blob) = git_repo.find_blob(entry.id) {
-            if let Ok(content) = String::from_utf8(blob.content().to_vec()) {
-                for (idx, line) in content.lines().enumerate() {
-                    if line.contains(query) {
-                        matches.push((path.clone(), idx + 1, line.to_string()));
-                    }
+        if let Ok(blob) = git_repo.find_blob(entry.id)
+            && let Ok(content) = String::from_utf8(blob.content().to_vec())
+        {
+            for (idx, line) in content.lines().enumerate() {
+                if line.contains(query) {
+                    matches.push((path.clone(), idx + 1, line.to_string()));
                 }
             }
         }

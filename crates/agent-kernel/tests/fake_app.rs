@@ -8,7 +8,7 @@ use agent_kernel::model::{
 use agent_kernel::tools::{Tool, ToolCatalog, ToolResult, ToolStatus};
 use agent_protocol::SequenceIdGenerator;
 use serde_json::{json, Value};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::rc::Rc;
 use std::time::Instant;
@@ -16,6 +16,7 @@ use std::time::Instant;
 struct ScriptedModelProvider {
     responses: Vec<CanonicalModelResponse>,
     index: usize,
+    calls: Option<Rc<Cell<usize>>>,
 }
 
 struct RecordingProvider {
@@ -81,6 +82,15 @@ impl ScriptedModelProvider {
         Self {
             responses,
             index: 0,
+            calls: None,
+        }
+    }
+
+    fn with_call_counter(responses: Vec<CanonicalModelResponse>, calls: Rc<Cell<usize>>) -> Self {
+        Self {
+            responses,
+            index: 0,
+            calls: Some(calls),
         }
     }
 }
@@ -90,6 +100,9 @@ impl ModelProvider for ScriptedModelProvider {
         &mut self,
         _request: &CanonicalModelRequest,
     ) -> Result<CanonicalModelResponse, ModelError> {
+        if let Some(calls) = &self.calls {
+            calls.set(calls.get() + 1);
+        }
         if self.index >= self.responses.len() {
             panic!("No more scripted responses available");
         }
@@ -185,17 +198,29 @@ impl Tool for EchoTool {
 fn build_coordinator(
     provider: impl ModelProvider,
 ) -> SessionCoordinator<EchoApp, impl ModelProvider, SequenceIdGenerator> {
+    build_coordinator_with_limits(
+        provider,
+        Limits {
+            max_turns: 10,
+            max_tool_calls: 10,
+            max_completion_attempts: 10,
+            wall_clock_budget: None,
+            ledger_path: None,
+            max_repeated_actions: 3,
+            max_input_tokens: None,
+            max_cost_usd: None,
+        },
+    )
+}
+
+fn build_coordinator_with_limits(
+    provider: impl ModelProvider,
+    limits: Limits,
+) -> SessionCoordinator<EchoApp, impl ModelProvider, SequenceIdGenerator> {
     let mut catalog = ToolCatalog::new();
     catalog.register(Box::new(EchoTool));
-    let limits = Limits {
-        max_turns: 10,
-        max_tool_calls: 10,
-        max_completion_attempts: 10,
-        wall_clock_budget: None,
-        ledger_path: None,
-        max_repeated_actions: 3,
-    };
-    let id_gen = SequenceIdGenerator::new(["ses-1", "exec-1", "exec-2", "exec-3"]);
+    let id_gen =
+        SequenceIdGenerator::new(["ses-1", "exec-1", "exec-2", "exec-3", "exec-4", "exec-5"]);
     SessionCoordinator::new(EchoApp {}, provider, id_gen, catalog, limits)
 }
 
@@ -664,4 +689,142 @@ fn rejected_tool_result_is_labeled_as_untrusted_repository_content() {
         "rejected tool call feedback must be fed back to the model: {:?}",
         turn2_context
     );
+}
+
+#[test]
+fn usage_budget_exhaustion_terminates_before_model_completion() {
+    // The first response stays below the limit; only the accumulated usage
+    // from the second response exhausts the budget. This also makes sure the
+    // check happens before dispatching the second response's completion.
+    let cases = [
+        (
+            Limits {
+                max_turns: 10,
+                max_tool_calls: 10,
+                max_completion_attempts: 10,
+                wall_clock_budget: None,
+                ledger_path: None,
+                max_repeated_actions: 3,
+                max_input_tokens: Some(5),
+                max_cost_usd: None,
+            },
+            vec![
+                UsageRecord {
+                    input_tokens: 3,
+                    output_tokens: 1,
+                    estimated_cost_usd: None,
+                },
+                UsageRecord {
+                    input_tokens: 3,
+                    output_tokens: 1,
+                    estimated_cost_usd: None,
+                },
+            ],
+            "input",
+        ),
+        (
+            Limits {
+                max_turns: 10,
+                max_tool_calls: 10,
+                max_completion_attempts: 10,
+                wall_clock_budget: None,
+                ledger_path: None,
+                max_repeated_actions: 3,
+                max_input_tokens: None,
+                max_cost_usd: Some(0.01),
+            },
+            vec![
+                UsageRecord {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    estimated_cost_usd: Some(0.006),
+                },
+                UsageRecord {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    estimated_cost_usd: Some(0.006),
+                },
+            ],
+            "cost",
+        ),
+    ];
+
+    for (limits, usages, exhausted_budget) in cases {
+        let model_calls = Rc::new(Cell::new(0));
+        let provider = ScriptedModelProvider::with_call_counter(
+            vec![
+                CanonicalModelResponse {
+                    actions: vec![ModelAction::ToolCall {
+                        action_id: "act-1".into(),
+                        tool: "echo".into(),
+                        arguments: json!({}),
+                    }],
+                    usage: Some(usages[0].clone()),
+                },
+                CanonicalModelResponse {
+                    actions: vec![ModelAction::ToolCall {
+                        action_id: "act-2".into(),
+                        tool: "echo".into(),
+                        arguments: json!({}),
+                    }],
+                    usage: Some(usages[1].clone()),
+                },
+                // If the coordinator ignores the accumulated budget, it will
+                // dispatch this completion request.  The budget check must stop
+                // the session before this response is requested or completed.
+                CanonicalModelResponse {
+                    actions: vec![ModelAction::CompletionRequest {
+                        action_id: "act-3".into(),
+                        payload: json!({}),
+                    }],
+                    usage: None,
+                },
+            ],
+            Rc::clone(&model_calls),
+        );
+
+        let (result, events) =
+            build_coordinator_with_limits(provider, limits).run_full(EchoRequest);
+
+        assert_eq!(
+            model_calls.get(),
+            2,
+            "the two usage-bearing responses must actually be reached"
+        );
+        assert_eq!(
+            result.tool_calls, 1,
+            "the below-limit first response should be dispatched"
+        );
+        let budget_event = events
+            .iter()
+            .find(|event| event.event_type == "kernel.session_budget_exhausted")
+            .expect("exhausting an accumulated usage budget must emit a budget-exhausted event");
+        let details = budget_event.details.as_deref().unwrap_or_default();
+        assert!(
+            details.to_ascii_lowercase().contains(exhausted_budget),
+            "budget event details must name the exhausted {} budget: {:?}",
+            exhausted_budget,
+            details
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.event_type == "kernel.session_indeterminate"),
+            "budget exhaustion must emit only the budget-exhausted event before building the terminal result"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == "kernel.model_completed")
+                .count(),
+            1,
+            "the exhausted second response must not emit model completion"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.event_type == "kernel.completion_accepted"),
+            "budget exhaustion must terminate indeterminately rather than accept completion"
+        );
+    }
 }

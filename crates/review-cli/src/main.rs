@@ -12,6 +12,8 @@ fn main() {
     let mut base_url: String = "https://api.openai.com/v1/chat/completions".into();
     let mut max_turns: u32 = 10;
     let mut wall_clock_budget_secs: u64 = 60;
+    let mut max_input_tokens: Option<u64> = None;
+    let mut max_cost_usd: Option<f64> = None;
     let mut emit_events = false;
     let mut repository: Option<String> = None;
     let mut base_ref: Option<String> = None;
@@ -55,6 +57,14 @@ fn main() {
                 wall_clock_budget_secs = flag_value(&args, i, "--wall-clock-budget-secs")
                     .parse()
                     .unwrap_or(60);
+                i += 1;
+            }
+            "--max-input-tokens" => {
+                max_input_tokens = flag_value(&args, i, "--max-input-tokens").parse().ok();
+                i += 1;
+            }
+            "--max-cost-usd" => {
+                max_cost_usd = flag_value(&args, i, "--max-cost-usd").parse().ok();
                 i += 1;
             }
             "--emit-events" => {
@@ -157,6 +167,8 @@ fn main() {
         max_tool_calls: 40,
         max_completion_attempts: 3,
         wall_clock_budget: Some(Duration::from_secs(wall_clock_budget_secs)),
+        max_input_tokens,
+        max_cost_usd,
         ledger_path: ledger_path.map(|p| std::path::PathBuf::from(p)),
         max_repeated_actions: 3,
     };
