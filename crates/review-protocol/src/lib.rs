@@ -12,12 +12,20 @@ pub enum ReviewStatus {
     ChangesRequested,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub enum ReviewReason {
     #[serde(rename = "REVIEW_ENGINE_NOT_AVAILABLE")]
     ReviewEngineNotAvailable,
     #[serde(rename = "REVIEW_COMPLETED")]
     ReviewCompleted,
+    #[serde(rename = "MODEL_FAILURE")]
+    ModelFailure,
+    #[serde(rename = "BUDGET_EXHAUSTED")]
+    BudgetExhausted,
+    #[serde(rename = "SESSION_STALLED")]
+    SessionStalled,
+    #[serde(rename = "LIMIT_EXCEEDED")]
+    LimitExceeded,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

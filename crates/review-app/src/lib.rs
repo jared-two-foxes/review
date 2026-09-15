@@ -213,6 +213,7 @@ pub struct ReviewState {
     changed_files: Vec<String>,
     inspected_paths: Vec<String>,
     has_truncated_search: bool,
+    terminal_reason: Option<ReviewReason>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -296,6 +297,7 @@ impl AgentApplication for ReviewApplication {
                 changed_files: vec![],
                 inspected_paths: vec![],
                 has_truncated_search: false,
+                terminal_reason: None,
             },
             requested_tools: vec![
                 "get_change_summary".into(),
@@ -495,50 +497,69 @@ impl AgentApplication for ReviewApplication {
     }
 
     fn reduce_event(&self, state: &Self::State, event: &LedgerEvent) -> Self::State {
-        match event.event_type.as_str() {
-            "kernel.tool_completed" => {
-                let mut changed_files = state.changed_files.clone();
-                let mut inspected_paths = state.inspected_paths.clone();
-                let mut has_truncated_search = state.has_truncated_search;
+        let terminal_reason = match event.event_type.as_str() {
+            "kernel.tool_completed" => Some(ReviewReason::ReviewCompleted),
+            "kernel.model_failed" => Some(ReviewReason::ModelFailure),
+            "kernel.session_budget_exhausted" => Some(ReviewReason::BudgetExhausted),
+            "kernel.session_stalled" => Some(ReviewReason::SessionStalled),
+            "kernel.session_limit_exceeded" => Some(ReviewReason::LimitExceeded),
+            "kernel.session_indeterminate" => state.terminal_reason.clone(),
+            _ => state.terminal_reason.clone(),
+        };
 
-                // Parse the tool event details JSON to track what was inspected
-                if let Some(details) = &event.details
-                    && let Ok(info) = serde_json::from_str::<serde_json::Value>(details)
+        if event.event_type.as_str() == "kernel.tool_completed" {
+            let mut changed_files = state.changed_files.clone();
+            let mut inspected_paths = state.inspected_paths.clone();
+            let mut has_truncated_search = state.has_truncated_search;
+
+            // Parse the tool event details JSON to track what was inspected
+            if let Some(details) = &event.details
+                && let Ok(info) = serde_json::from_str::<serde_json::Value>(details)
+            {
+                let tool = info["tool"].as_str().unwrap_or("");
+                if tool == "get_changed_files"
+                    && let Some(files) = info["files"].as_array()
                 {
-                    let tool = info["tool"].as_str().unwrap_or("");
-                    if tool == "get_changed_files"
-                        && let Some(files) = info["files"].as_array()
-                    {
-                        for path in files.iter().filter_map(|f| f.as_str()) {
-                            if !changed_files.contains(&path.to_string()) {
-                                changed_files.push(path.to_string());
-                            }
+                    for path in files.iter().filter_map(|f| f.as_str()) {
+                        if !changed_files.contains(&path.to_string()) {
+                            changed_files.push(path.to_string());
                         }
                     }
-                    if (tool == "read_file" || tool == "read_diff" || tool == "list_directory")
-                        && let Some(path) = info["path"].as_str()
-                        && !inspected_paths.contains(&path.to_string())
-                    {
-                        inspected_paths.push(path.to_string());
-                    }
-                    if tool == "search_text"
-                        && let Some(completeness) = info["completeness"].as_bool()
-                        && !completeness
-                        && !has_truncated_search
-                    {
-                        has_truncated_search = true;
-                    }
                 }
-                ReviewState {
-                    inspected: true,
-                    findings: state.findings.clone(),
-                    requirements: state.requirements.clone(),
-                    changed_files,
-                    inspected_paths,
-                    has_truncated_search,
+                if (tool == "read_file" || tool == "read_diff" || tool == "list_directory")
+                    && let Some(path) = info["path"].as_str()
+                    && !inspected_paths.contains(&path.to_string())
+                {
+                    inspected_paths.push(path.to_string());
+                }
+                if tool == "search_text"
+                    && let Some(completeness) = info["completeness"].as_bool()
+                    && !completeness
+                    && !has_truncated_search
+                {
+                    has_truncated_search = true;
                 }
             }
-            _ => state.clone(),
+
+            ReviewState {
+                inspected: true,
+                findings: state.findings.clone(),
+                requirements: state.requirements.clone(),
+                changed_files,
+                inspected_paths,
+                has_truncated_search,
+                terminal_reason,
+            }
+        } else {
+            ReviewState {
+                inspected: state.inspected,
+                findings: state.findings.clone(),
+                requirements: state.requirements.clone(),
+                changed_files: state.changed_files.clone(),
+                inspected_paths: state.inspected_paths.clone(),
+                has_truncated_search: state.has_truncated_search,
+                terminal_reason,
+            }
         }
     }
 
@@ -547,7 +568,7 @@ impl AgentApplication for ReviewApplication {
             .map_err(|e| ReviewError(format!("invalid completion payload: {}", e)))
     }
 
-    fn build_terminal_result(&self, _state: &Self::State, usage: &UsageRecord) -> Self::Result {
+    fn build_terminal_result(&self, state: &Self::State, usage: &UsageRecord) -> Self::Result {
         let accepted = *self.completion_accepted.borrow();
         let pending = self.pending_completion.borrow();
         let empty_binding = vec![];
@@ -582,6 +603,8 @@ impl AgentApplication for ReviewApplication {
             status,
             reason: if accepted {
                 ReviewReason::ReviewCompleted
+            } else if let Some(tr) = &state.terminal_reason {
+                tr.clone()
             } else {
                 ReviewReason::ReviewEngineNotAvailable
             },
