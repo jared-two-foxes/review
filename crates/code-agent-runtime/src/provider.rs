@@ -55,6 +55,7 @@ pub struct OpenAiProvider {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
+    pub trace_content: bool,
     client: reqwest::blocking::Client,
 }
 
@@ -68,10 +69,14 @@ impl OpenAiProvider {
             .timeout(Duration::from_secs(30))
             .build()
             .expect("Failed to build HTTP client");
+        let trace_content = std::env::var("REVIEW_TRACE_CONTENT")
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
         Self {
             base_url: base_url.into(),
             api_key: api_key.into(),
             model: model.into(),
+            trace_content,
             client,
         }
     }
@@ -213,12 +218,12 @@ impl OpenAiProvider {
                 .unwrap_or_default();
             let content = choice["message"]["content"].as_str().unwrap_or("");
             tracing::debug!(
-                "OpenAI response: finish_reason={}, tool_names={:?}, content={}",
                 finish_reason,
-                tool_names,
-                content
+                tools = ?tool_names,
+                content_present = !content.is_empty(),
+                "model response"
             );
-            if !content.is_empty() {
+            if self.trace_content && !content.is_empty() {
                 let preview = if content.len() > 300 {
                     format!("{}...", &content[..300])
                 } else {
