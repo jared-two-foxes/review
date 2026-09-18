@@ -689,9 +689,15 @@ impl Tool for SearchTextTool {
                 m
             }
             ReviewTarget::WorkingDirectory => {
-                let mut m = Vec::new();
-                search_workdir_walk(self.repo.root(), "", query, &self.policy, &mut m);
-                m
+                match search_with_ripgrep(&self.repo, query, &self.policy) {
+                    Ok(m) => m,
+                    Err(_) => {
+                        return ToolResult {
+                            status: ToolStatus::Failed,
+                            value: json!({"error": "failed to search working directory"}),
+                        };
+                    }
+                }
             }
             ReviewTarget::Index => match search_index(&self.repo, query, &self.policy) {
                 Ok(m) => m,
@@ -771,53 +777,6 @@ fn search_tree_walk(
     }
 }
 
-fn search_workdir_walk(
-    dir: &std::path::Path,
-    prefix: &str,
-    query: &str,
-    policy: &SecurityPolicy,
-    matches: &mut Vec<(String, usize, String)>,
-) {
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let name = match entry.file_name().into_string() {
-                Ok(n) => n,
-                Err(_) => continue,
-            };
-            if name == ".git" {
-                continue;
-            }
-            let rel = if prefix.is_empty() {
-                name.clone()
-            } else {
-                format!("{}/{}", prefix, name)
-            };
-            if policy.is_path_denied(&rel) {
-                continue;
-            }
-            let file_type = match entry.file_type() {
-                Ok(ft) => ft,
-                Err(_) => {
-                    continue;
-                }
-            };
-            if file_type.is_symlink() {
-                continue;
-            }
-            let path = entry.path();
-            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                search_workdir_walk(&path, &rel, query, policy, matches);
-            } else if let Ok(content) = std::fs::read_to_string(&path) {
-                for (idx, line) in content.lines().enumerate() {
-                    if line.contains(query) {
-                        matches.push((rel.clone(), idx + 1, line.to_string()));
-                    }
-                }
-            }
-        }
-    }
-}
-
 fn search_index(
     repo: &GitRepo,
     query: &str,
@@ -846,4 +805,43 @@ fn search_index(
         }
     }
     Ok(matches)
+}
+
+fn search_with_ripgrep(
+    repo: &GitRepo,
+    query: &str,
+    policy: &SecurityPolicy,
+) -> Result<Vec<(String, usize, String)>, crate::error::RepoError> {
+    use ripgrep_api::SearchBuilder;
+
+    let escaped_query = regex::escape(query);
+    let root = repo.root();
+
+    let matches: Vec<_> = SearchBuilder::new(&escaped_query)
+        .path(root)
+        .build()
+        .map_err(|e| crate::error::RepoError::Other(format!("search failed: {}", e)))?
+        .collect();
+
+    let root_str = root.to_string_lossy();
+    let mut results = Vec::new();
+    for mat in matches {
+        let abs_path = mat.path.to_string_lossy().to_string();
+        let rel_path = abs_path
+            .strip_prefix(&*root_str)
+            .unwrap_or(&abs_path)
+            .trim_start_matches(['/', '\\'])
+            .to_string();
+
+        if policy.is_path_denied(&rel_path) {
+            continue;
+        }
+
+        results.push((
+            rel_path,
+            mat.line.unwrap_or(0) as usize,
+            String::from_utf8_lossy(mat.text.as_ref()).into_owned(),
+        ));
+    }
+    Ok(results)
 }
