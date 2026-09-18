@@ -58,6 +58,13 @@ pub struct UsageSummary {
     pub estimated_cost_usd: Option<f64>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SkillOutput {
+    pub id: String,
+    pub version: String,
+    pub content_hash: String,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewResult {
@@ -68,6 +75,8 @@ pub struct ReviewResult {
     pub completed_at: String,
     pub findings: Vec<FindingOutput>,
     pub usage: UsageSummary,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<SkillOutput>,
 }
 
 #[derive(Serialize, Deserialize)]

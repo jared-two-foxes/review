@@ -1609,10 +1609,13 @@ dependencies = [
  "agent-kernel",
  "agent-protocol",
  "code-agent-runtime",
+ "glob",
+ "hex",
  "jsonschema 0.29.1",
  "review-protocol",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

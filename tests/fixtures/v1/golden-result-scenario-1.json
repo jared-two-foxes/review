@@ -9,5 +9,12 @@
     "input_tokens": 30,
     "output_tokens": 12,
     "estimated_cost_usd": 0.03
-  }
+  },
+  "skills": [
+    {
+      "id": "general-implementation-review",
+      "version": "1.0.0",
+      "content_hash": "sha256:af467d4b54333d93607cbc47df5ff804cfb00c771bab3507488bd35d665b1cdd"
+    }
+  ]
 }
