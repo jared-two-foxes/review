@@ -333,7 +333,7 @@ fn evaluates_each_seeded_repository_with_scripted_provider() {
             },
         ]);
 
-        let (result, events) = run_review_with_provider(&request, &config, provider)
+        let (result, events) = run_review_with_provider(&request, &config, provider, None)
             .expect("scripted provider should run without a network or API key");
         let tool_call_count = events
             .iter()
@@ -404,7 +404,7 @@ fn evaluates_each_seeded_repository_with_scripted_provider() {
                 wall_clock_budget: Some(std::time::Duration::from_secs(600)),
                 ..ReviewConfig::default()
             };
-            let (live_result, live_events, setup_error) = run_review(&request, &live_config);
+            let (live_result, live_events, setup_error) = run_review(&request, &live_config, None);
             let live_result_json =
                 serde_json::to_value(&live_result).expect("result is serializable");
             let live_verdict = live_result_json["status"]

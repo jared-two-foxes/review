@@ -26,6 +26,8 @@ pub enum ReviewReason {
     SessionStalled,
     #[serde(rename = "LIMIT_EXCEEDED")]
     LimitExceeded,
+    #[serde(rename = "CANCELLED")]
+    Cancelled,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

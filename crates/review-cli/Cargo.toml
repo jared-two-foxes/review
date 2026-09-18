@@ -9,6 +9,7 @@ review-protocol = { path = "../review-protocol" }
 review-app = { path = "../review-app" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+ctrlc = "3"
 
 [dev-dependencies]
 cli-common = { path = "../cli-common" }

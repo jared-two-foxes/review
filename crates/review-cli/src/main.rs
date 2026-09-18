@@ -1,6 +1,10 @@
 use review_app::ReviewConfig;
 use review_protocol::{ReviewRequest, ReviewStatus};
 use std::path::Path;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
@@ -158,6 +162,13 @@ fn main() {
         emit_error("REQUEST_VALIDATION_FAILED", &msg);
     }
 
+    let cancellation_token = Arc::new(AtomicBool::new(false));
+    let token_clone = Arc::clone(&cancellation_token);
+    ctrlc::set_handler(move || {
+        token_clone.store(true, Ordering::Relaxed);
+    })
+    .expect("set Ctrl-C handler");
+
     let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
     let config = ReviewConfig {
         model,
@@ -172,7 +183,8 @@ fn main() {
         ledger_path: ledger_path.map(|p| std::path::PathBuf::from(p)),
         max_repeated_actions: 3,
     };
-    let (result, events, setup_err) = review_app::run_review(&request, &config);
+    let (result, _events, setup_err) =
+        review_app::run_review(&request, &config, Some(&cancellation_token));
 
     if let Some(reason) = setup_err {
         tracing::warn!(error = %reason, "review setup failed");

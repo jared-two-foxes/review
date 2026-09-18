@@ -1,7 +1,7 @@
 use agent_kernel::{
     application::AgentApplication,
     coordinator::SessionCoordinator,
-    ledger::Limits,
+    limits::Limits,
     model::{
         CanonicalModelRequest, CanonicalModelResponse, ModelAction, ModelError, ModelProvider,
     },
@@ -19,7 +19,6 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-
 // ── Scripted provider (same pattern as fake_app) ──
 struct ScriptedModelProvider {
     responses: Vec<CanonicalModelResponse>,
@@ -445,6 +444,7 @@ fn requirements_orientation_is_framed_as_data_for_analysis() {
             max_input_tokens: None,
             max_cost_usd: None,
         },
+        None,
     );
     server.join().expect("model server");
 

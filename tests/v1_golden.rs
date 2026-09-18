@@ -1,7 +1,8 @@
 use std::fs;
 
 use agent_kernel::coordinator::SessionCoordinator;
-use agent_kernel::ledger::{LedgerEvent, Limits};
+use agent_kernel::ledger::LedgerEvent;
+use agent_kernel::limits::Limits;
 use agent_kernel::model::{
     CanonicalModelRequest, CanonicalModelResponse, ModelAction, ModelError, ModelProvider,
     UsageRecord,
@@ -133,7 +134,7 @@ fn scenario_1_golden_match() {
         build_catalog(),
         build_limits(10),
     )
-    .run_full(build_request());
+    .run_full(build_request(), None);
     assert_eq!(result.usage.input_tokens, 30);
     assert_eq!(result.usage.output_tokens, 12);
     assert_eq!(result.usage.estimated_cost_usd, Some(0.03));
@@ -188,7 +189,7 @@ fn scenario_2_golden_match() {
         build_catalog(),
         build_limits(10),
     )
-    .run_full(build_request());
+    .run_full(build_request(), None);
     assert_eq!(result.usage.input_tokens, 9);
     assert_eq!(result.usage.output_tokens, 12);
     let cost = result
@@ -223,7 +224,7 @@ fn scenario_3_golden_match() {
         build_catalog(),
         build_limits(1),
     )
-    .run_full(build_request());
+    .run_full(build_request(), None);
     assert_eq!(result.usage.input_tokens, 7);
     assert_eq!(result.usage.output_tokens, 9);
     assert_eq!(result.usage.estimated_cost_usd, Some(0.7));
@@ -254,7 +255,7 @@ fn scenario_4_golden_match() {
         build_catalog(),
         build_limits(1),
     )
-    .run_full(build_request());
+    .run_full(build_request(), None);
     assert_eq!(result.usage.input_tokens, 11);
     assert_eq!(result.usage.output_tokens, 13);
     assert_eq!(result.usage.estimated_cost_usd, Some(0.11));

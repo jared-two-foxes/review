@@ -4,12 +4,12 @@ use agent_kernel::application::{
     AgentApplication, ApplicationDescriptor, ApplicationInitialization, CompletionDecision,
     ContextBlock, InstructionBlock,
 };
-use agent_kernel::coordinator::SessionCoordinator;
-use agent_kernel::tools::ToolCatalog;
 use agent_kernel::{
-    ledger::{LedgerEvent, Limits},
+    coordinator::SessionCoordinator,
+    ledger::LedgerEvent,
+    limits::Limits,
     model::{ModelProvider, ToolDescription, UsageRecord},
-    tools::{Tool, ToolResult, ToolStatus},
+    tools::{Tool, ToolCatalog, ToolResult, ToolStatus},
 };
 use agent_protocol::{Clock, IdGenerator, RandomIdGenerator, SystemClock};
 use code_agent_runtime::{
@@ -27,6 +27,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 pub struct ReviewConfig {
@@ -64,8 +65,9 @@ impl Default for ReviewConfig {
 pub fn run_review(
     request: &ReviewRequest,
     config: &ReviewConfig,
+    cancel: Option<&AtomicBool>,
 ) -> (ReviewResult, Vec<LedgerEvent>, Option<String>) {
-    match compose_and_run(request, config) {
+    match compose_and_run(request, config, cancel) {
         Ok((result, events)) => (result, events, None),
         Err(reason) => (
             ReviewResult {
@@ -95,6 +97,7 @@ pub fn run_review_with_provider<P: ModelProvider>(
     request: &ReviewRequest,
     config: &ReviewConfig,
     provider: P,
+    cancel: Option<&AtomicBool>,
 ) -> Result<(ReviewResult, Vec<LedgerEvent>), String> {
     let path = Path::new(&request.repository_path);
     let ref_repo = open_repo(path)?;
@@ -166,12 +169,13 @@ pub fn run_review_with_provider<P: ModelProvider>(
     };
     let coordinator =
         SessionCoordinator::new(app, provider, RandomIdGenerator::new(), catalog, limits);
-    Ok(coordinator.run_full(request.clone()))
+    Ok(coordinator.run_full(request.clone(), cancel))
 }
 
 fn compose_and_run(
     request: &ReviewRequest,
     config: &ReviewConfig,
+    cancel: Option<&AtomicBool>,
 ) -> Result<(ReviewResult, Vec<LedgerEvent>), String> {
     if config.api_key.is_empty() {
         return Err("missing API key".into());
@@ -181,7 +185,7 @@ fn compose_and_run(
         config.api_key.as_str(),
         config.model.as_str(),
     );
-    run_review_with_provider(request, config, provider)
+    run_review_with_provider(request, config, provider, cancel)
 }
 
 /// Deterministic output seam for replay tests.
@@ -504,6 +508,7 @@ impl AgentApplication for ReviewApplication {
             "kernel.session_stalled" => Some(ReviewReason::SessionStalled),
             "kernel.session_limit_exceeded" => Some(ReviewReason::LimitExceeded),
             "kernel.session_indeterminate" => state.terminal_reason.clone(),
+            "kernel.session_cancelled" => Some(ReviewReason::Cancelled),
             _ => state.terminal_reason.clone(),
         };
 

@@ -2,7 +2,7 @@ use std::fs;
 
 use agent_kernel::{
     coordinator::SessionCoordinator,
-    ledger::Limits,
+    limits::Limits,
     model::{
         CanonicalModelRequest, CanonicalModelResponse, ModelAction, ModelError, ModelProvider,
         UsageRecord,
@@ -122,7 +122,7 @@ fn run_scenario(
         build_catalog(),
         build_limits(max_turns),
     )
-    .run_full(build_request());
+    .run_full(build_request(), None);
 
     let events_json = serde_json::to_vec_pretty(&events).unwrap();
     let result_json = serde_json::to_vec_pretty(&result).unwrap();

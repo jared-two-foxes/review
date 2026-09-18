@@ -334,7 +334,8 @@ mod coordinator_failure_tests {
         AgentApplication, ApplicationDescriptor, ApplicationInitialization, CompletionDecision,
     };
     use agent_kernel::coordinator::SessionCoordinator;
-    use agent_kernel::ledger::{LedgerEvent, Limits};
+    use agent_kernel::ledger::LedgerEvent;
+    use agent_kernel::limits::Limits;
     use agent_protocol::SequenceIdGenerator;
     use serde_json::Value;
 
@@ -408,7 +409,7 @@ mod coordinator_failure_tests {
             agent_kernel::tools::ToolCatalog::new(),
             limits,
         );
-        let (result, events) = coordinator.run_full(Request);
+        let (result, events) = coordinator.run_full(Request, None);
         assert_eq!(result, ());
         events
     }

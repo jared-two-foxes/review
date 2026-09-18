@@ -1,6 +1,7 @@
 use agent_kernel::application::*;
 use agent_kernel::coordinator::SessionCoordinator;
-use agent_kernel::ledger::{LedgerEvent, Limits};
+use agent_kernel::ledger::LedgerEvent;
+use agent_kernel::limits::Limits;
 use agent_kernel::model::{
     CanonicalModelRequest, CanonicalModelResponse, ConversationMessage, ModelAction, ModelError,
     ModelProvider, ToolDescription, UsageRecord,
@@ -460,7 +461,7 @@ fn model_generation_failure_ends_indeterminate_without_approval() {
     for failure in failures {
         let expected_failure = failure.clone();
         let coordinator = build_coordinator(FailingModelProvider::new(failure));
-        let execution = catch_unwind(AssertUnwindSafe(|| coordinator.run_full(EchoRequest)));
+        let execution = catch_unwind(AssertUnwindSafe(|| coordinator.run_full(EchoRequest, None)));
 
         match execution {
             Err(payload) => {
@@ -784,7 +785,7 @@ fn usage_budget_exhaustion_terminates_before_model_completion() {
         );
 
         let (result, events) =
-            build_coordinator_with_limits(provider, limits).run_full(EchoRequest);
+            build_coordinator_with_limits(provider, limits).run_full(EchoRequest, None);
 
         assert_eq!(
             model_calls.get(),
@@ -827,4 +828,51 @@ fn usage_budget_exhaustion_terminates_before_model_completion() {
             "budget exhaustion must terminate indeterminately rather than accept completion"
         );
     }
+}
+
+#[test]
+fn cancellation_produces_exactly_one_terminal_state() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    let token = Arc::new(AtomicBool::new(false));
+    let token_clone = Arc::clone(&token);
+
+    let provider = ScriptedModelProvider::new(vec![CanonicalModelResponse {
+        actions: vec![ModelAction::ToolCall {
+            action_id: "act-1".into(),
+            tool: "echo".into(),
+            arguments: json!({}),
+        }],
+        usage: None,
+    }]);
+
+    let limits = Limits {
+        max_turns: 10,
+        max_tool_calls: 10,
+        max_completion_attempts: 10,
+        wall_clock_budget: None,
+        ledger_path: None,
+        max_repeated_actions: 3,
+        max_input_tokens: None,
+        max_cost_usd: None,
+    };
+
+    // Set the cancellation token before running — the coordinator should
+    // detect it at the top of turn 2 (after the first turn's tool call)
+    token_clone.store(true, Ordering::Relaxed);
+
+    let coordinator = build_coordinator_with_limits(provider, limits);
+    let (_result, events) = coordinator.run_full(EchoRequest, Some(&token_clone));
+
+    // Exactly one terminal state: cancelled
+    assert!(events
+        .iter()
+        .any(|e| e.event_type == "kernel.session_cancelled"));
+    assert!(!events
+        .iter()
+        .any(|e| e.event_type == "kernel.completion_accepted"));
+    assert!(!events.iter().any(|e| e.event_type == "kernel.model_failed"));
 }

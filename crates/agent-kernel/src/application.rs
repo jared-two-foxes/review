@@ -1,6 +1,7 @@
 use serde_json::Value;
 
-use crate::ledger::{LedgerEvent, Limits};
+use crate::ledger::LedgerEvent;
+use crate::limits::Limits;
 use crate::model::UsageRecord;
 
 pub struct ApplicationDescriptor {

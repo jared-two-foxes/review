@@ -1,9 +1,11 @@
 use agent_protocol::IdGenerator;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tracing;
 
 use crate::application::{AgentApplication, CompletionDecision};
-use crate::ledger::{InMemoryLedger, LedgerEvent, Limits};
+use crate::ledger::{InMemoryLedger, LedgerEvent};
+use crate::limits::Limits;
 use crate::model::{
     CanonicalModelRequest, ConversationMessage, ModelAction, ModelProvider, ToolCallRecord,
     UsageRecord,
@@ -39,10 +41,14 @@ where
     }
 
     pub fn run(self, request: A::Request) -> A::Result {
-        self.run_full(request).0
+        self.run_full(request, None).0
     }
 
-    pub fn run_full(mut self, request: A::Request) -> (A::Result, Vec<LedgerEvent>) {
+    pub fn run_full(
+        mut self,
+        request: A::Request,
+        cancel: Option<&AtomicBool>,
+    ) -> (A::Result, Vec<LedgerEvent>) {
         self.app
             .validate_request(&request)
             .expect("request validation failed");
@@ -84,6 +90,25 @@ where
         // Main Loop
         loop {
             turn += 1;
+
+            // Check for cancellation before starting a new turn
+            if let Some(token) = cancel {
+                if token.load(Ordering::Relaxed) {
+                    tracing::warn!(turn, "session cancelled by external request");
+                    self.append_event_with_details(
+                        &session_id,
+                        turn,
+                        "",
+                        "kernel.session_cancelled",
+                        Some("cancelled by external request".into()),
+                    );
+                    return (
+                        self.app.build_terminal_result(&state, &usage),
+                        self.ledger.events().to_vec(),
+                    );
+                }
+            }
+
             if turn > self.limits.max_turns {
                 return (
                     self.app.build_terminal_result(&state, &usage),
@@ -237,6 +262,23 @@ where
                             );
                         }
 
+                        // Check for cancellation before executing a tool
+                        if let Some(token) = cancel {
+                            if token.load(std::sync::atomic::Ordering::Relaxed) {
+                                tracing::warn!(turn, "session cancelled during tool dispatch");
+                                self.append_event_with_details(
+                                    &session_id,
+                                    turn,
+                                    "",
+                                    "kernel.session_cancelled",
+                                    Some("cancelled by external request".into()),
+                                );
+                                return (
+                                    self.app.build_terminal_result(&state, &usage),
+                                    self.ledger.events().to_vec(),
+                                );
+                            }
+                        }
                         let tool_impl = match self.catalog.get(&tool) {
                             Some(t) => t,
                             None => {
