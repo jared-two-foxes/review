@@ -104,6 +104,7 @@ pub struct ImplementState {
     desired_content: String,
     desired_content_id: String,
     inspected: bool,
+    mutation_before_inspection: bool,
     mutation_applied: bool,
     verified: bool,
     terminal_reason: Option<ImplementReason>,
@@ -115,7 +116,6 @@ pub struct ImplementError(pub String);
 pub struct ImplementApplication {
     pending_completion: RefCell<Option<ImplementCompletion>>,
     completion_accepted: RefCell<bool>,
-    terminal_completion_failure: RefCell<Option<String>>,
     clock: RefCell<Box<dyn Clock>>,
     id_gen: RefCell<Box<dyn IdGenerator>>,
 }
@@ -128,7 +128,6 @@ impl ImplementApplication {
         Self {
             pending_completion: RefCell::new(None),
             completion_accepted: RefCell::new(false),
-            terminal_completion_failure: RefCell::new(None),
             clock: RefCell::new(Box::new(clock)),
             id_gen: RefCell::new(Box::new(id_gen)),
         }
@@ -230,6 +229,7 @@ impl AgentApplication for ImplementApplication {
                 desired_content: request.desired_content.clone(),
                 desired_content_id: content_id_for_bytes(request.desired_content.as_bytes()),
                 inspected: false,
+                mutation_before_inspection: false,
                 mutation_applied: false,
                 verified: false,
                 terminal_reason: None,
@@ -295,9 +295,13 @@ impl AgentApplication for ImplementApplication {
             if path == state.target_path
                 && tool == "replace_file_content"
                 && status == "Succeeded"
-                && content_id == state.desired_content_id
             {
-                next.mutation_applied = true;
+                if !state.inspected {
+                    next.mutation_before_inspection = true;
+                }
+                if content_id == state.desired_content_id {
+                    next.mutation_applied = true;
+                }
             }
         }
 
@@ -314,9 +318,7 @@ impl AgentApplication for ImplementApplication {
         state: &Self::State,
         completion: &Self::Completion,
     ) -> CompletionDecision {
-        if state.mutation_applied && !state.inspected {
-            *self.terminal_completion_failure.borrow_mut() =
-                Some("mutation_applied_before_inspection".into());
+        if state.mutation_before_inspection {
             return CompletionDecision::RejectedTerminal {
                 reason: "mutation_applied_before_inspection".into(),
             };
@@ -385,7 +387,6 @@ impl AgentApplication for ImplementApplication {
     fn build_terminal_result(&self, state: &Self::State, usage: &UsageRecord) -> Self::Result {
         let accepted = *self.completion_accepted.borrow();
         let pending = self.pending_completion.borrow();
-        let terminal_completion_failure = self.terminal_completion_failure.borrow();
         ImplementResult {
             status: if accepted {
                 ImplementStatus::CandidateReady
@@ -403,9 +404,9 @@ impl AgentApplication for ImplementApplication {
             completed_at: self.clock.borrow().now(),
             target_path: state.target_path.clone(),
             summary: pending.as_ref().map(|completion| completion.summary.clone()).or_else(|| {
-                terminal_completion_failure
-                    .as_ref()
-                    .map(|reason| format!("Completion rejected: {}", reason))
+                state
+                    .mutation_before_inspection
+                    .then_some("Completion rejected: mutation_applied_before_inspection".into())
             }),
             applied: state.mutation_applied,
             verified: state.verified,
