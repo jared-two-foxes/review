@@ -29,6 +29,7 @@ The main crates are:
 
 - `crates/review-cli` — CLI entrypoint and argument parsing
 - `crates/review-app` — review-specific behavior, completion rules, and built-in review skills
+- `crates/implement-app` — proof-of-concept second consumer for scoped-write implementation flows
 - `crates/agent-kernel` — generic bounded model/tool orchestration
 - `crates/code-agent-runtime` — repository access, diffs, security boundaries, and model provider integration
 - `crates/review-protocol` — request/result/error types and JSON Schema generation

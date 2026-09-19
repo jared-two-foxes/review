@@ -100,6 +100,8 @@ pub struct ImplementResult {
 #[derive(Clone, Debug)]
 pub struct ImplementState {
     target_path: String,
+    expected_content: String,
+    desired_content: String,
     desired_content_id: String,
     inspected: bool,
     mutation_applied: bool,
@@ -108,7 +110,7 @@ pub struct ImplementState {
 }
 
 #[derive(Debug)]
-pub struct ImplementError(String);
+pub struct ImplementError(pub String);
 
 pub struct ImplementApplication {
     pending_completion: RefCell<Option<ImplementCompletion>>,
@@ -222,6 +224,8 @@ impl AgentApplication for ImplementApplication {
         Ok(ApplicationInitialization {
             initial_state: ImplementState {
                 target_path: request.target_path.clone(),
+                expected_content: request.expected_content.clone(),
+                desired_content: request.desired_content.clone(),
                 desired_content_id: content_id_for_bytes(request.desired_content.as_bytes()),
                 inspected: false,
                 mutation_applied: false,
@@ -243,8 +247,8 @@ impl AgentApplication for ImplementApplication {
     fn build_context(&self, state: &Self::State) -> Vec<ContextBlock> {
         vec![ContextBlock {
             content: format!(
-                "Implementation target data: modify `{}` only. Candidate readiness requires one successful bounded mutation and one post-mutation verification read whose content matches the requested target state.",
-                state.target_path
+                "Implementation target data: modify `{}` only. Expected current content:\n{}\nDesired final content:\n{}\nCandidate readiness requires one successful bounded mutation and one post-mutation verification read whose content matches the requested target state.",
+                state.target_path, state.expected_content, state.desired_content
             ),
         }]
     }
@@ -383,7 +387,9 @@ impl AgentApplication for ImplementApplication {
             implementation_id: self.id_gen.borrow_mut().next_id(),
             completed_at: self.clock.borrow().now(),
             target_path: state.target_path.clone(),
-            summary: pending.as_ref().map(|completion| completion.summary.clone()),
+            summary: pending
+                .as_ref()
+                .map(|completion| completion.summary.clone()),
             applied: state.mutation_applied,
             verified: state.verified,
             usage: ImplementUsageSummary {

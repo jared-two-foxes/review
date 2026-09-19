@@ -321,10 +321,7 @@ impl Tool for ReadFileTool {
                 };
             }
         };
-        let content_id = format!(
-            "{}",
-            content_id_for_bytes(&content_bytes)
-        );
+        let content_id = format!("{}", content_id_for_bytes(&content_bytes));
         let (content, truncated, completeness) = if content_bytes.len() > self.byte_limit {
             let bounded = bound_bytes(&content_bytes, self.byte_limit);
             (bounded.content, bounded.truncated, bounded.completeness)
@@ -385,15 +382,20 @@ impl Tool for ReplaceFileContentTool {
     fn validate_arguments(&self, arguments: &Value) -> Result<(), String> {
         if arguments.get("path").and_then(Value::as_str).is_some()
             && arguments.get("expected").and_then(Value::as_str).is_some()
-            && arguments.get("replacement").and_then(Value::as_str).is_some()
+            && arguments
+                .get("replacement")
+                .and_then(Value::as_str)
+                .is_some()
             && arguments
                 .as_object()
                 .is_some_and(|object| object.len() == 3)
         {
             Ok(())
         } else {
-            Err("arguments must contain only string path, expected, and replacement fields"
-                .to_string())
+            Err(
+                "arguments must contain only string path, expected, and replacement fields"
+                    .to_string(),
+            )
         }
     }
 
