@@ -379,7 +379,7 @@ impl AgentApplication for ReviewApplication {
                 return CompletionDecision::RejectedRemediable {
                     reason_codes: vec!["insufficient_exploration".into()],
                     missing_requirements: vec![format!(
-                        "The change involves {} files.  You must call list_directory and read_file atleast once before completing.",
+                        "The change involves {} files.  You must call list_directory and read_file at least once before completing.",
                         state.changed_files.len()
                     )],
                     feedback_for_model: vec![InstructionBlock {
