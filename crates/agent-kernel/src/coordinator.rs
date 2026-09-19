@@ -524,7 +524,7 @@ fn build_tool_event_details(
     if let Some(completeness) = result.get("completeness").and_then(|v| v.as_bool()) {
         summary["completeness"] = serde_json::Value::Bool(completeness);
     }
-    if tool == "get_changed_files" {
+    if tool == "get_changed_files" || tool == "get_change_summary" {
         if let Some(changed_files) = result.get("files").and_then(|f| f.as_array()) {
             let paths: Vec<&str> = changed_files
                 .iter()
@@ -534,4 +534,33 @@ fn build_tool_event_details(
         }
     }
     Some(summary.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_tool_event_details;
+    use serde_json::json;
+
+    #[test]
+    fn change_summary_event_details_include_changed_files() {
+        let details = build_tool_event_details(
+            "get_change_summary",
+            &json!({}),
+            &json!({
+                "files": [
+                    {"path": "src/main.rs"},
+                    {"path": "src/lib.rs"}
+                ]
+            }),
+        )
+        .expect("tool details");
+
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&details).expect("json"),
+            json!({
+                "tool": "get_change_summary",
+                "changed_files": ["src/main.rs", "src/lib.rs"]
+            })
+        );
+    }
 }

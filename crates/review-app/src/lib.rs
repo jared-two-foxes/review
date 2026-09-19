@@ -347,7 +347,7 @@ impl AgentApplication for ReviewApplication {
             });
         }
         blocks.push(ContextBlock {
-            content: "Review the code change in this repository. Begin by calling get_change_summary to inspect the change, then call read_diff, read_file, list_directory, or search_text as needed. When you have enough information, issue a completion with your findings as a JSON object of the form {\"findings\":[{\"blocking\": <bool>, \"message\": \"<string>\", \"path\": <optional or null>, \"line\": <optional or null>, \"severity\": \"<high|medium|low>\", \"recommendation\": <optional or null>}]}. Include the required severity field on every finding, include path, line, and recommendation when applicable, and include every actionable issue you found. Do not return an empty findings array; identify the most relevant concrete observation from the inspected change.".into(),
+            content: "Review the code change in this repository. Begin by calling get_change_summary to inspect the change and get_changed_files to enumerate every changed file, then call read_diff, read_file, list_directory, or search_text as needed. When you have enough information, issue a completion with your findings as a JSON object of the form {\"findings\":[{\"blocking\": <bool>, \"message\": \"<string>\", \"path\": <optional or null>, \"line\": <optional or null>, \"severity\": \"<high|medium|low>\", \"recommendation\": <optional or null>}]}. Include the required severity field on every finding, include path, line, and recommendation when applicable, and include every actionable issue you found. Do not return an empty findings array; identify the most relevant concrete observation from the inspected change.".into(),
         });
         blocks
     }
@@ -557,7 +557,7 @@ impl AgentApplication for ReviewApplication {
                 && let Ok(info) = serde_json::from_str::<serde_json::Value>(details)
             {
                 let tool = info["tool"].as_str().unwrap_or("");
-                if tool == "get_changed_files"
+                if (tool == "get_changed_files" || tool == "get_change_summary")
                     && let Some(files) = info["changed_files"].as_array()
                 {
                     for path in files.iter().filter_map(|f| f.as_str()) {
@@ -745,6 +745,32 @@ mod tests {
         let event = LedgerEvent {
             event_type: "kernel.tool_completed".into(),
             details: Some(r#"{"tool":"get_changed_files","changed_files":["src/main.rs"]}"#.into()),
+            ..Default::default()
+        };
+        let reduced = app.reduce_event(&initial, &event);
+
+        assert!(reduced.changed_files.contains(&"src/main.rs".to_string()));
+    }
+
+    #[test]
+    fn reduce_event_populates_changed_files_from_change_summary_event() {
+        let app = ReviewApplication::new_with_sources(
+            agent_protocol::FixedClock::new("2025-01-01T00:00:00Z"),
+            agent_protocol::SequenceIdGenerator::new(vec!["rev-001"]),
+        );
+        let request = ReviewRequest {
+            schema: "review.request/v1".into(),
+            repository_path: ".".into(),
+            base_ref: "HEAD~1".into(),
+            head_ref: "HEAD".into(),
+            requirements: None,
+        };
+        let initial = app.initialize(&request).unwrap().initial_state;
+        let event = LedgerEvent {
+            event_type: "kernel.tool_completed".into(),
+            details: Some(
+                r#"{"tool":"get_change_summary","changed_files":["src/main.rs"]}"#.into(),
+            ),
             ..Default::default()
         };
         let reduced = app.reduce_event(&initial, &event);
