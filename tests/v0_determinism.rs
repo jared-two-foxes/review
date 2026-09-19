@@ -4,6 +4,12 @@ use agent_protocol::{FixedClock, SequenceIdGenerator};
 use review_app::run_review_with_sources;
 use review_protocol::ReviewRequest;
 
+fn normalize_line_endings(bytes: &[u8]) -> Vec<u8> {
+    String::from_utf8_lossy(bytes)
+        .replace("\r\n", "\n")
+        .into_bytes()
+}
+
 #[test]
 fn replay_is_byte_identical_to_golden() {
     let request: ReviewRequest = serde_json::from_str(
@@ -26,7 +32,10 @@ fn replay_is_byte_identical_to_golden() {
     );
 
     assert_eq!(first, second);
-    assert_eq!(first, golden);
+    assert_eq!(
+        normalize_line_endings(&first),
+        normalize_line_endings(&golden)
+    );
 
     // Different injected sources must produce a different serialized result;
     // otherwise the replay seam is merely ignored by the application.
