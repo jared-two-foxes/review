@@ -279,8 +279,13 @@ impl AgentApplication for ImplementApplication {
             let content_id = info["content_id"].as_str().unwrap_or_default();
 
             if path == state.target_path && tool == "read_file" && status == "Succeeded" {
-                next.inspected = true;
-                if next.mutation_applied && content_id == state.desired_content_id {
+                if !state.mutation_applied {
+                    next.inspected = true;
+                }
+                if state.inspected
+                    && state.mutation_applied
+                    && content_id == state.desired_content_id
+                {
                     next.verified = true;
                 }
             }
@@ -398,5 +403,112 @@ impl AgentApplication for ImplementApplication {
                 estimated_cost_usd: usage.estimated_cost_usd,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_kernel::application::AgentApplication;
+    use agent_kernel::ledger::LedgerEvent;
+    use agent_protocol::{FixedClock, SequenceIdGenerator};
+    use serde_json::json;
+
+    fn request() -> ImplementRequest {
+        ImplementRequest {
+            repository_path: ".".into(),
+            target_path: "src/app.txt".into(),
+            expected_content: "before".into(),
+            desired_content: "after".into(),
+        }
+    }
+
+    fn tool_completed_event(tool: &str, path: &str, status: &str, content_id: &str) -> LedgerEvent {
+        LedgerEvent {
+            event_type: "kernel.tool_completed".into(),
+            details: Some(
+                json!({
+                    "tool": tool,
+                    "path": path,
+                    "status": status,
+                    "content_id": content_id,
+                })
+                .to_string(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn reduce_event_marks_verification_only_after_pre_mutation_inspection() {
+        let app = ImplementApplication::new_with_sources(
+            FixedClock::new("2025-01-01T00:00:00Z"),
+            SequenceIdGenerator::new(["impl-001"]),
+        );
+        let mut state = app.initialize(&request()).unwrap().initial_state;
+
+        state = app.reduce_event(
+            &state,
+            &tool_completed_event("read_file", "src/app.txt", "Succeeded", "before-id"),
+        );
+        assert!(state.inspected);
+        assert!(!state.verified);
+
+        state = app.reduce_event(
+            &state,
+            &tool_completed_event(
+                "replace_file_content",
+                "src/app.txt",
+                "Succeeded",
+                &content_id_for_bytes("after".as_bytes()),
+            ),
+        );
+        assert!(state.mutation_applied);
+        assert!(!state.verified);
+
+        state = app.reduce_event(
+            &state,
+            &tool_completed_event(
+                "read_file",
+                "src/app.txt",
+                "Succeeded",
+                &content_id_for_bytes("after".as_bytes()),
+            ),
+        );
+        assert!(state.inspected);
+        assert!(state.verified);
+    }
+
+    #[test]
+    fn reduce_event_does_not_count_post_mutation_read_as_inspection() {
+        let app = ImplementApplication::new_with_sources(
+            FixedClock::new("2025-01-01T00:00:00Z"),
+            SequenceIdGenerator::new(["impl-001"]),
+        );
+        let mut state = app.initialize(&request()).unwrap().initial_state;
+
+        state = app.reduce_event(
+            &state,
+            &tool_completed_event(
+                "replace_file_content",
+                "src/app.txt",
+                "Succeeded",
+                &content_id_for_bytes("after".as_bytes()),
+            ),
+        );
+        assert!(state.mutation_applied);
+        assert!(!state.inspected);
+
+        state = app.reduce_event(
+            &state,
+            &tool_completed_event(
+                "read_file",
+                "src/app.txt",
+                "Succeeded",
+                &content_id_for_bytes("after".as_bytes()),
+            ),
+        );
+        assert!(!state.inspected);
+        assert!(!state.verified);
     }
 }
