@@ -30,6 +30,7 @@ pub struct ContextBlock {
     pub content: String,
 }
 
+#[derive(Clone, Debug)]
 pub enum CompletionDecision {
     Accepted,
     RejectedRemediable {
