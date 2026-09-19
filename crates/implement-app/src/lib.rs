@@ -70,6 +70,7 @@ pub enum ImplementStatus {
 pub enum ImplementReason {
     CandidateReady,
     CandidateNotReady,
+    MutationAppliedBeforeInspection,
     ModelFailure,
     BudgetExhausted,
     SessionStalled,
@@ -115,6 +116,7 @@ pub struct ImplementError(pub String);
 pub struct ImplementApplication {
     pending_completion: RefCell<Option<ImplementCompletion>>,
     completion_accepted: RefCell<bool>,
+    terminal_completion_reason: RefCell<Option<ImplementReason>>,
     clock: RefCell<Box<dyn Clock>>,
     id_gen: RefCell<Box<dyn IdGenerator>>,
 }
@@ -127,6 +129,7 @@ impl ImplementApplication {
         Self {
             pending_completion: RefCell::new(None),
             completion_accepted: RefCell::new(false),
+            terminal_completion_reason: RefCell::new(None),
             clock: RefCell::new(Box::new(clock)),
             id_gen: RefCell::new(Box::new(id_gen)),
         }
@@ -313,6 +316,8 @@ impl AgentApplication for ImplementApplication {
         completion: &Self::Completion,
     ) -> CompletionDecision {
         if state.mutation_applied && !state.inspected {
+            *self.terminal_completion_reason.borrow_mut() =
+                Some(ImplementReason::MutationAppliedBeforeInspection);
             return CompletionDecision::RejectedTerminal {
                 reason: "mutation_applied_before_inspection".into(),
             };
@@ -390,9 +395,10 @@ impl AgentApplication for ImplementApplication {
             reason: if accepted {
                 ImplementReason::CandidateReady
             } else {
-                state
-                    .terminal_reason
+                self.terminal_completion_reason
+                    .borrow()
                     .clone()
+                    .or_else(|| state.terminal_reason.clone())
                     .unwrap_or(ImplementReason::CandidateNotReady)
             },
             implementation_id: self.id_gen.borrow_mut().next_id(),
@@ -547,5 +553,42 @@ mod tests {
             CompletionDecision::RejectedTerminal { ref reason }
             if reason == "mutation_applied_before_inspection"
         ));
+    }
+
+    #[test]
+    fn build_terminal_result_reports_mutation_before_inspection_reason() {
+        let app = ImplementApplication::new_with_sources(
+            FixedClock::new("2025-01-01T00:00:00Z"),
+            SequenceIdGenerator::new(["impl-001"]),
+        );
+        let state = app.reduce_event(
+            &app.initialize(&request()).unwrap().initial_state,
+            &tool_completed_event(
+                "replace_file_content",
+                "src/app.txt",
+                "Succeeded",
+                &content_id_for_bytes("after".as_bytes()),
+            ),
+        );
+
+        let decision = app.validate_completion(
+            &state,
+            &ImplementCompletion {
+                ready: true,
+                summary: "Updated src/app.txt".into(),
+            },
+        );
+        assert!(matches!(decision, CompletionDecision::RejectedTerminal { .. }));
+
+        let result = app.build_terminal_result(
+            &state,
+            &UsageRecord {
+                input_tokens: 0,
+                output_tokens: 0,
+                estimated_cost_usd: None,
+            },
+        );
+
+        assert_eq!(result.reason, ImplementReason::MutationAppliedBeforeInspection);
     }
 }
