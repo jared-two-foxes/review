@@ -312,6 +312,12 @@ impl AgentApplication for ImplementApplication {
         state: &Self::State,
         completion: &Self::Completion,
     ) -> CompletionDecision {
+        if state.mutation_applied && !state.inspected {
+            return CompletionDecision::RejectedTerminal {
+                reason: "mutation_applied_before_inspection".into(),
+            };
+        }
+
         if !state.inspected {
             return CompletionDecision::RejectedRemediable {
                 reason_codes: vec!["target_not_inspected".into()],
@@ -510,5 +516,36 @@ mod tests {
         );
         assert!(!state.inspected);
         assert!(!state.verified);
+    }
+
+    #[test]
+    fn validate_completion_rejects_mutation_before_inspection_as_terminal() {
+        let app = ImplementApplication::new_with_sources(
+            FixedClock::new("2025-01-01T00:00:00Z"),
+            SequenceIdGenerator::new(["impl-001"]),
+        );
+        let state = app.reduce_event(
+            &app.initialize(&request()).unwrap().initial_state,
+            &tool_completed_event(
+                "replace_file_content",
+                "src/app.txt",
+                "Succeeded",
+                &content_id_for_bytes("after".as_bytes()),
+            ),
+        );
+
+        let decision = app.validate_completion(
+            &state,
+            &ImplementCompletion {
+                ready: true,
+                summary: "Updated src/app.txt".into(),
+            },
+        );
+
+        assert!(matches!(
+            decision,
+            CompletionDecision::RejectedTerminal { ref reason }
+            if reason == "mutation_applied_before_inspection"
+        ));
     }
 }
