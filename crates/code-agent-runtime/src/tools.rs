@@ -1,9 +1,11 @@
 use agent_kernel::model::ToolDescription;
 use agent_kernel::tools::{Tool, ToolResult, ToolStatus};
 use serde_json::{Value, json};
-use sha2::Digest;
+use std::io::Write;
+use tempfile::NamedTempFile;
 
 use crate::diff::{FileStatus, changed_files, compute_diff, read_diff};
+use crate::identity::content_id_for_bytes;
 use crate::repo::GitRepo;
 use crate::security::{SecurityPolicy, bound_bytes};
 use crate::target::ReviewTarget;
@@ -135,10 +137,7 @@ impl Tool for GetChangedFilesTool {
                     self.head
                         .read_file(&self.repo, &change.path)
                         .ok()
-                        .map(|content| {
-                            let hash = sha2::Sha256::digest(&content);
-                            format!("sha256:{}", hex::encode(hash))
-                        })
+                        .map(|content| content_id_for_bytes(&content))
                         .map(Value::String)
                         .unwrap_or(Value::Null)
                 };
@@ -223,10 +222,7 @@ impl Tool for ReadDiffTool {
         };
         match read_diff(&self.repo, &self.base, &self.head, path, self.byte_limit) {
             Ok(diff) => {
-                let content_id = format!(
-                    "sha256:{}",
-                    hex::encode(sha2::Sha256::digest(diff.content.as_bytes()))
-                );
+                let content_id = content_id_for_bytes(diff.content.as_bytes());
                 ToolResult {
                     status: ToolStatus::Succeeded,
                     value: json!({
@@ -327,10 +323,7 @@ impl Tool for ReadFileTool {
                 };
             }
         };
-        let content_id = format!(
-            "sha256:{}",
-            hex::encode(sha2::Sha256::digest(&content_bytes))
-        );
+        let content_id = format!("{}", content_id_for_bytes(&content_bytes));
         let (content, truncated, completeness) = if content_bytes.len() > self.byte_limit {
             let bounded = bound_bytes(&content_bytes, self.byte_limit);
             (bounded.content, bounded.truncated, bounded.completeness)
@@ -350,6 +343,176 @@ impl Tool for ReadFileTool {
                 "completeness": completeness,
                 "content_id": content_id,
                 "observed_head": self.head.label(&self.repo),
+            }),
+        }
+    }
+}
+
+pub struct ReplaceFileContentTool {
+    repo: GitRepo,
+    policy: SecurityPolicy,
+}
+
+impl ReplaceFileContentTool {
+    pub fn new(repo: GitRepo, policy: SecurityPolicy) -> Self {
+        Self { repo, policy }
+    }
+}
+
+impl Tool for ReplaceFileContentTool {
+    fn name(&self) -> &str {
+        "replace_file_content"
+    }
+
+    fn description(&self) -> ToolDescription {
+        ToolDescription {
+            name: self.name().to_string(),
+            description: "Replace the full content of one repository file when the current content exactly matches an expected precondition.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path", "expected", "replacement"],
+                "properties": {
+                    "path": {"type": "string"},
+                    "expected": {"type": "string"},
+                    "replacement": {"type": "string"}
+                }
+            }),
+        }
+    }
+
+    fn validate_arguments(&self, arguments: &Value) -> Result<(), String> {
+        if arguments.get("path").and_then(Value::as_str).is_some()
+            && arguments.get("expected").and_then(Value::as_str).is_some()
+            && arguments
+                .get("replacement")
+                .and_then(Value::as_str)
+                .is_some()
+            && arguments
+                .as_object()
+                .is_some_and(|object| object.len() == 3)
+        {
+            Ok(())
+        } else {
+            Err(
+                "arguments must contain only string path, expected, and replacement fields"
+                    .to_string(),
+            )
+        }
+    }
+
+    fn execute(&self, arguments: &Value) -> ToolResult {
+        let path = match arguments.get("path").and_then(Value::as_str) {
+            Some(path) => path,
+            None => {
+                return ToolResult {
+                    status: ToolStatus::Failed,
+                    value: json!({"error": "missing path argument"}),
+                };
+            }
+        };
+        if self.policy.is_path_denied(path) {
+            return ToolResult {
+                status: ToolStatus::Denied,
+                value: json!({"error": "path denied"}),
+            };
+        }
+        let expected = match arguments.get("expected").and_then(Value::as_str) {
+            Some(expected) => expected,
+            None => {
+                return ToolResult {
+                    status: ToolStatus::Failed,
+                    value: json!({"error": "missing expected argument"}),
+                };
+            }
+        };
+        let replacement = match arguments.get("replacement").and_then(Value::as_str) {
+            Some(replacement) => replacement,
+            None => {
+                return ToolResult {
+                    status: ToolStatus::Failed,
+                    value: json!({"error": "missing replacement argument"}),
+                };
+            }
+        };
+        let full_path = match self.policy.validate_path(&self.repo, path) {
+            Ok(path) => path,
+            Err(_) => {
+                return ToolResult {
+                    status: ToolStatus::Denied,
+                    value: json!({"error": "path denied"}),
+                };
+            }
+        };
+        let current_bytes = match std::fs::read(&full_path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return ToolResult {
+                    status: ToolStatus::Failed,
+                    value: json!({"error": format!("failed to read file: {}", error)}),
+                };
+            }
+        };
+        if current_bytes != expected.as_bytes() {
+            return ToolResult {
+                status: ToolStatus::Failed,
+                value: json!({
+                    "error": "content precondition did not match",
+                    "path": path,
+                    "content_id": content_id_for_bytes(&current_bytes),
+                }),
+            };
+        }
+        let parent = match full_path.parent() {
+            Some(parent) => parent,
+            None => {
+                return ToolResult {
+                    status: ToolStatus::Failed,
+                    value: json!({"error": "failed to derive parent directory"}),
+                };
+            }
+        };
+        let permissions = match std::fs::metadata(&full_path) {
+            Ok(metadata) => metadata.permissions(),
+            Err(error) => {
+                return ToolResult {
+                    status: ToolStatus::Failed,
+                    value: json!({"error": format!("failed to read file metadata: {}", error)}),
+                };
+            }
+        };
+        let mut temp_file = match NamedTempFile::new_in(parent) {
+            Ok(temp_file) => temp_file,
+            Err(error) => {
+                return ToolResult {
+                    status: ToolStatus::Failed,
+                    value: json!({"error": format!("failed to create temp file: {}", error)}),
+                };
+            }
+        };
+        if let Err(error) = temp_file
+            .write_all(replacement.as_bytes())
+            .and_then(|_| temp_file.as_file_mut().sync_all())
+            .and_then(|_| std::fs::set_permissions(temp_file.path(), permissions))
+        {
+            return ToolResult {
+                status: ToolStatus::Failed,
+                value: json!({"error": format!("failed to write file: {}", error)}),
+            };
+        }
+        if let Err(error) = temp_file.persist(&full_path) {
+            return ToolResult {
+                status: ToolStatus::Failed,
+                value: json!({"error": format!("failed to write file: {}", error.error)}),
+            };
+        }
+        ToolResult {
+            status: ToolStatus::Succeeded,
+            value: json!({
+                "path": path,
+                "content_id": content_id_for_bytes(replacement.as_bytes()),
+                "bytes_written": replacement.len(),
+                "observed_head": "working",
             }),
         }
     }

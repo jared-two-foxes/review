@@ -11,10 +11,11 @@ use agent_kernel::{
     ledger::LedgerEvent,
     limits::Limits,
     model::{ModelProvider, ToolDescription, UsageRecord},
-    tools::{Tool, ToolCatalog, ToolResult, ToolStatus},
+    tools::{Tool, ToolResult, ToolStatus},
 };
 use agent_protocol::{Clock, IdGenerator, RandomIdGenerator, SystemClock};
 use code_agent_runtime::{
+    capabilities::{CodeToolCatalog, ReadOnly},
     provider::OpenAiProvider,
     repo::GitRepo,
     security::SecurityPolicy,
@@ -111,39 +112,39 @@ pub fn run_review_with_provider<P: ModelProvider>(
     drop(ref_repo);
 
     let byte_limit = 65_536usize;
-    let mut catalog = ToolCatalog::new();
-    catalog.register(Box::new(GetChangeSummaryTool::new(
+    let mut catalog = CodeToolCatalog::<ReadOnly>::new();
+    catalog.register(GetChangeSummaryTool::new(
         open_repo(path)?,
         base.clone(),
         head.clone(),
-    )));
-    catalog.register(Box::new(GetChangedFilesTool::new(
+    ));
+    catalog.register(GetChangedFilesTool::new(
         open_repo(path)?,
         base.clone(),
         head.clone(),
-    )));
-    catalog.register(Box::new(ReadDiffTool::new(
+    ));
+    catalog.register(ReadDiffTool::new(
         open_repo(path)?,
         base.clone(),
         head.clone(),
         byte_limit,
-    )));
-    catalog.register(Box::new(ReadFileTool::new(
+    ));
+    catalog.register(ReadFileTool::new(
         open_repo(path)?,
         head.clone(),
         byte_limit,
         SecurityPolicy::new(),
-    )));
-    catalog.register(Box::new(ListDirectoryTool::new(
+    ));
+    catalog.register(ListDirectoryTool::new(
         open_repo(path)?,
         head.clone(),
         SecurityPolicy::new(),
-    )));
-    catalog.register(Box::new(SearchTextTool::new(
+    ));
+    catalog.register(SearchTextTool::new(
         open_repo(path)?,
         head.clone(),
         SecurityPolicy::new(),
-    )));
+    ));
 
     let requirements = request
         .requirements
@@ -170,8 +171,13 @@ pub fn run_review_with_provider<P: ModelProvider>(
         max_input_tokens: config.max_input_tokens,
         max_cost_usd: config.max_cost_usd,
     };
-    let coordinator =
-        SessionCoordinator::new(app, provider, RandomIdGenerator::new(), catalog, limits);
+    let coordinator = SessionCoordinator::new(
+        app,
+        provider,
+        RandomIdGenerator::new(),
+        catalog.into_inner(),
+        limits,
+    );
     Ok(coordinator.run_full(request.clone(), cancel))
 }
 

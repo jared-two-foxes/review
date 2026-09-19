@@ -23,7 +23,7 @@
     "turn": 1,
     "action_id": "act-1",
     "execution_id": "",
-    "details": "{\"tool\":\"get_change_summary\"}",
+    "details": "{\"status\":\"Succeeded\",\"tool\":\"get_change_summary\"}",
     "prev_hash": "sha256:2969756ab21cc6e832b7bf1d1e07425b6a1a9ee4e49ed2a85fd428fb285bbe65"
   },
   {
@@ -33,7 +33,7 @@
     "turn": 2,
     "action_id": "",
     "execution_id": "",
-    "prev_hash": "sha256:4b989b82d32226d5458bba986f5b00603ab381591eaf2fed41aa89ab2f810bab"
+    "prev_hash": "sha256:5c1cfbec1e741821567ee6e204b6aa519aed7bf056910c757be3bf5286ece67b"
   },
   {
     "event_type": "kernel.model_completed",
@@ -42,7 +42,7 @@
     "turn": 2,
     "action_id": "",
     "execution_id": "",
-    "prev_hash": "sha256:f96d8b33d57f9624cb90f2596f6ed65f91ce60df1174e50037f1b947735ffa33"
+    "prev_hash": "sha256:a5329bf14fbf261322a956b1c5b34fc172e72aa0a1cba140ad5d7445aef46ec2"
   },
   {
     "event_type": "kernel.completion_accepted",
@@ -51,6 +51,6 @@
     "turn": 2,
     "action_id": "act-2",
     "execution_id": "",
-    "prev_hash": "sha256:bb0ca5398c4b19656565bd7aae7c958647270d17d53b394140c17cf9305b211a"
+    "prev_hash": "sha256:333e0b3e5c1f1d2c1894475dcbd69fdf5cc7b363253cf953395b8b368a3a87ba"
   }
 ]

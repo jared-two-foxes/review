@@ -355,8 +355,7 @@ where
 
                         tracing::info!(turn, action_id, tool= %tool, "tool completed");
 
-                        let tool_details =
-                            build_tool_event_details(&tool, &arguments, &result.value);
+                        let tool_details = build_tool_event_details(&tool, &arguments, &result);
                         let event = self.append_event_with_details(
                             &session_id,
                             turn,
@@ -509,23 +508,34 @@ where
 fn build_tool_event_details(
     tool: &str,
     arguments: &serde_json::Value,
-    result: &serde_json::Value,
+    result: &crate::tools::ToolResult,
 ) -> Option<String> {
     let mut summary = serde_json::json!({"tool": tool});
+    summary["status"] = serde_json::Value::String(
+        match result.status {
+            crate::tools::ToolStatus::Succeeded => "Succeeded",
+            crate::tools::ToolStatus::Failed => "Failed",
+            crate::tools::ToolStatus::Denied => "Denied",
+        }
+        .into(),
+    );
     if let Some(path) = arguments.get("path").and_then(|v| v.as_str()) {
         summary["path"] = serde_json::Value::String(path.into());
     }
     if let Some(query) = arguments.get("query").and_then(|v| v.as_str()) {
         summary["query"] = serde_json::Value::String(query.into());
     }
-    if let Some(truncated) = result.get("truncated").and_then(|v| v.as_bool()) {
+    if let Some(content_id) = result.value.get("content_id").and_then(|v| v.as_str()) {
+        summary["content_id"] = serde_json::Value::String(content_id.into());
+    }
+    if let Some(truncated) = result.value.get("truncated").and_then(|v| v.as_bool()) {
         summary["truncated"] = serde_json::Value::Bool(truncated);
     }
-    if let Some(completeness) = result.get("completeness").and_then(|v| v.as_bool()) {
+    if let Some(completeness) = result.value.get("completeness").and_then(|v| v.as_bool()) {
         summary["completeness"] = serde_json::Value::Bool(completeness);
     }
     if tool == "get_changed_files" {
-        if let Some(changed_files) = result.get("files").and_then(|f| f.as_array()) {
+        if let Some(changed_files) = result.value.get("files").and_then(|f| f.as_array()) {
             let paths: Vec<&str> = changed_files
                 .iter()
                 .filter_map(|f| f["path"].as_str())
