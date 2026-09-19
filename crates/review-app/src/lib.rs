@@ -566,16 +566,16 @@ impl AgentApplication for ReviewApplication {
                         }
                     }
                 }
+                if tool == "read_file" {
+                    has_read_file = true;
+                }
+                if tool == "list_directory" {
+                    has_list_directory = true;
+                }
                 if (tool == "read_file" || tool == "read_diff" || tool == "list_directory")
                     && let Some(path) = info["path"].as_str()
                     && !inspected_paths.contains(&path.to_string())
                 {
-                    if tool == "read_file" {
-                        has_read_file = true;
-                    }
-                    if tool == "list_directory" {
-                        has_list_directory = true;
-                    }
                     inspected_paths.push(path.to_string());
                 }
                 if tool == "search_text"
@@ -750,6 +750,37 @@ mod tests {
         let reduced = app.reduce_event(&initial, &event);
 
         assert!(reduced.changed_files.contains(&"src/main.rs".to_string()));
+    }
+
+    #[test]
+    fn reduce_event_tracks_read_file_after_read_diff_on_same_path() {
+        let app = ReviewApplication::new_with_sources(
+            agent_protocol::FixedClock::new("2025-01-01T00:00:00Z"),
+            agent_protocol::SequenceIdGenerator::new(vec!["rev-001"]),
+        );
+        let request = ReviewRequest {
+            schema: "review.request/v1".into(),
+            repository_path: ".".into(),
+            base_ref: "HEAD~1".into(),
+            head_ref: "HEAD".into(),
+            requirements: None,
+        };
+        let initial = app.initialize(&request).unwrap().initial_state;
+        let read_diff = LedgerEvent {
+            event_type: "kernel.tool_completed".into(),
+            details: Some(r#"{"tool":"read_diff","path":"src/main.rs"}"#.into()),
+            ..Default::default()
+        };
+        let after_diff = app.reduce_event(&initial, &read_diff);
+        let read_file = LedgerEvent {
+            event_type: "kernel.tool_completed".into(),
+            details: Some(r#"{"tool":"read_file","path":"src/main.rs"}"#.into()),
+            ..Default::default()
+        };
+        let reduced = app.reduce_event(&after_diff, &read_file);
+
+        assert!(reduced.has_read_file);
+        assert_eq!(reduced.inspected_paths, vec!["src/main.rs".to_string()]);
     }
 
     #[test]
