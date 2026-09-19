@@ -115,6 +115,7 @@ pub struct ImplementError(pub String);
 pub struct ImplementApplication {
     pending_completion: RefCell<Option<ImplementCompletion>>,
     completion_accepted: RefCell<bool>,
+    terminal_completion_failure: RefCell<Option<String>>,
     clock: RefCell<Box<dyn Clock>>,
     id_gen: RefCell<Box<dyn IdGenerator>>,
 }
@@ -127,6 +128,7 @@ impl ImplementApplication {
         Self {
             pending_completion: RefCell::new(None),
             completion_accepted: RefCell::new(false),
+            terminal_completion_failure: RefCell::new(None),
             clock: RefCell::new(Box::new(clock)),
             id_gen: RefCell::new(Box::new(id_gen)),
         }
@@ -313,6 +315,8 @@ impl AgentApplication for ImplementApplication {
         completion: &Self::Completion,
     ) -> CompletionDecision {
         if state.mutation_applied && !state.inspected {
+            *self.terminal_completion_failure.borrow_mut() =
+                Some("mutation_applied_before_inspection".into());
             return CompletionDecision::RejectedTerminal {
                 reason: "mutation_applied_before_inspection".into(),
             };
@@ -381,6 +385,7 @@ impl AgentApplication for ImplementApplication {
     fn build_terminal_result(&self, state: &Self::State, usage: &UsageRecord) -> Self::Result {
         let accepted = *self.completion_accepted.borrow();
         let pending = self.pending_completion.borrow();
+        let terminal_completion_failure = self.terminal_completion_failure.borrow();
         ImplementResult {
             status: if accepted {
                 ImplementStatus::CandidateReady
@@ -397,9 +402,11 @@ impl AgentApplication for ImplementApplication {
             implementation_id: self.id_gen.borrow_mut().next_id(),
             completed_at: self.clock.borrow().now(),
             target_path: state.target_path.clone(),
-            summary: pending
-                .as_ref()
-                .map(|completion| completion.summary.clone()),
+            summary: pending.as_ref().map(|completion| completion.summary.clone()).or_else(|| {
+                terminal_completion_failure
+                    .as_ref()
+                    .map(|reason| format!("Completion rejected: {}", reason))
+            }),
             applied: state.mutation_applied,
             verified: state.verified,
             usage: ImplementUsageSummary {
@@ -548,4 +555,44 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn build_terminal_result_surfaces_terminal_completion_failure_in_summary() {
+        let app = ImplementApplication::new_with_sources(
+            FixedClock::new("2025-01-01T00:00:00Z"),
+            SequenceIdGenerator::new(["impl-001"]),
+        );
+        let state = app.reduce_event(
+            &app.initialize(&request()).unwrap().initial_state,
+            &tool_completed_event(
+                "replace_file_content",
+                "src/app.txt",
+                "Succeeded",
+                &content_id_for_bytes("after".as_bytes()),
+            ),
+        );
+
+        let decision = app.validate_completion(
+            &state,
+            &ImplementCompletion {
+                ready: true,
+                summary: "Updated src/app.txt".into(),
+            },
+        );
+        assert!(matches!(decision, CompletionDecision::RejectedTerminal { .. }));
+
+        let result = app.build_terminal_result(
+            &state,
+            &UsageRecord {
+                input_tokens: 0,
+                output_tokens: 0,
+                estimated_cost_usd: None,
+            },
+        );
+
+        assert_eq!(result.reason, ImplementReason::CandidateNotReady);
+        assert_eq!(
+            result.summary.as_deref(),
+            Some("Completion rejected: mutation_applied_before_inspection")
+        );
+    }
 }
