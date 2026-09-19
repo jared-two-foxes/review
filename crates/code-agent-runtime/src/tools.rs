@@ -451,8 +451,7 @@ impl Tool for ReplaceFileContentTool {
                 };
             }
         };
-        let current = String::from_utf8_lossy(&current_bytes).into_owned();
-        if current != expected {
+        if current_bytes != expected.as_bytes() {
             return ToolResult {
                 status: ToolStatus::Failed,
                 value: json!({
