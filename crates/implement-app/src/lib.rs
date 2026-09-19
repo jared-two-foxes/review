@@ -406,7 +406,7 @@ impl AgentApplication for ImplementApplication {
             summary: pending.as_ref().map(|completion| completion.summary.clone()).or_else(|| {
                 state
                     .mutation_before_inspection
-                    .then_some("Completion rejected: mutation_applied_before_inspection".into())
+                    .then_some("Ordering violation: mutation_applied_before_inspection".into())
             }),
             applied: state.mutation_applied,
             verified: state.verified,
@@ -593,7 +593,7 @@ mod tests {
         assert_eq!(result.reason, ImplementReason::CandidateNotReady);
         assert_eq!(
             result.summary.as_deref(),
-            Some("Completion rejected: mutation_applied_before_inspection")
+            Some("Ordering violation: mutation_applied_before_inspection")
         );
     }
 }
