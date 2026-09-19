@@ -2,6 +2,7 @@ use agent_kernel::model::ToolDescription;
 use agent_kernel::tools::{Tool, ToolResult, ToolStatus};
 use serde_json::{Value, json};
 use std::io::Write;
+use tempfile::NamedTempFile;
 
 use crate::diff::{FileStatus, changed_files, compute_diff, read_diff};
 use crate::identity::content_id_for_bytes;
@@ -471,15 +472,6 @@ impl Tool for ReplaceFileContentTool {
                 };
             }
         };
-        let file_name = match full_path.file_name() {
-            Some(file_name) => file_name.to_string_lossy(),
-            None => {
-                return ToolResult {
-                    status: ToolStatus::Failed,
-                    value: json!({"error": "failed to derive file name"}),
-                };
-            }
-        };
         let permissions = match std::fs::metadata(&full_path) {
             Ok(metadata) => metadata.permissions(),
             Err(error) => {
@@ -489,48 +481,29 @@ impl Tool for ReplaceFileContentTool {
                 };
             }
         };
-        let mut temp_path = None;
-        for attempt in 0..100 {
-            let candidate = parent.join(format!(
-                ".{}.tmp-{}-{}",
-                file_name,
-                std::process::id(),
-                attempt
-            ));
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&candidate)
-            {
-                Ok(mut temp_file) => {
-                    if let Err(error) = temp_file
-                        .write_all(replacement.as_bytes())
-                        .and_then(|_| temp_file.sync_all())
-                        .and_then(|_| std::fs::set_permissions(&candidate, permissions.clone()))
-                        .and_then(|_| std::fs::rename(&candidate, &full_path))
-                    {
-                        let _ = std::fs::remove_file(&candidate);
-                        return ToolResult {
-                            status: ToolStatus::Failed,
-                            value: json!({"error": format!("failed to write file: {}", error)}),
-                        };
-                    }
-                    temp_path = Some(candidate);
-                    break;
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(error) => {
-                    return ToolResult {
-                        status: ToolStatus::Failed,
-                        value: json!({"error": format!("failed to create temp file: {}", error)}),
-                    };
-                }
+        let mut temp_file = match NamedTempFile::new_in(parent) {
+            Ok(temp_file) => temp_file,
+            Err(error) => {
+                return ToolResult {
+                    status: ToolStatus::Failed,
+                    value: json!({"error": format!("failed to create temp file: {}", error)}),
+                };
             }
-        }
-        if temp_path.is_none() {
+        };
+        if let Err(error) = temp_file
+            .write_all(replacement.as_bytes())
+            .and_then(|_| temp_file.as_file_mut().sync_all())
+            .and_then(|_| std::fs::set_permissions(temp_file.path(), permissions))
+        {
             return ToolResult {
                 status: ToolStatus::Failed,
-                value: json!({"error": "failed to allocate temp file"}),
+                value: json!({"error": format!("failed to write file: {}", error)}),
+            };
+        }
+        if let Err(error) = temp_file.persist(&full_path) {
+            return ToolResult {
+                status: ToolStatus::Failed,
+                value: json!({"error": format!("failed to write file: {}", error.error)}),
             };
         }
         ToolResult {
