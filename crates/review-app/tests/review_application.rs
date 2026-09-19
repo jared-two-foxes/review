@@ -265,6 +265,10 @@ fn build_system_instructions_returns_review_policy_naming_tool_and_completion() 
         "policy must direct the model to inspect the change: {content}"
     );
     assert!(
+        content.contains("get_changed_files"),
+        "policy must direct the model to enumerate changed files: {content}"
+    );
+    assert!(
         content.contains("completion"),
         "policy must direct the model to issue a completion: {content}"
     );
@@ -403,14 +407,23 @@ fn requirements_orientation_is_framed_as_data_for_analysis() {
     let requests = Arc::new(Mutex::new(Vec::<String>::new()));
     let captured = Arc::clone(&requests);
     let server = std::thread::spawn(move || {
-        for turn in 0..2 {
+        for turn in 0..4 {
             let (mut stream, _) = listener.accept().expect("accept model request");
             let body = read_http_body(&mut stream);
             captured.lock().expect("capture lock").push(body);
-            let response = if turn == 0 {
-                r#"{"choices":[{"message":{"tool_calls":[{"id":"act-1","function":{"name":"get_change_summary","arguments":"{}"}}]}}],"usage":{}}"#
-            } else {
-                r#"{"choices":[{"message":{"content":"{\"findings\":[{\"blocking\":false,\"message\":\"The endpoint correctly handles malformed JSON input.\",\"severity\":\"low\"}]}"}}],"usage":{}}"#
+            let response = match turn {
+                0 => {
+                    r#"{"choices":[{"message":{"tool_calls":[{"id":"act-1","function":{"name":"get_change_summary","arguments":"{}"}}]}}],"usage":{}}"#
+                }
+                1 => {
+                    r#"{"choices":[{"message":{"tool_calls":[{"id":"act-1b","function":{"name":"get_changed_files","arguments":"{}"}}]}}],"usage":{}}"#
+                }
+                2 => {
+                    r#"{"choices":[{"message":{"tool_calls":[{"id":"act-1c","function":{"name":"read_file","arguments":"{\"path\":\"src/main.rs\"}"}}]}}],"usage":{}}"#
+                }
+                _ => {
+                    r#"{"choices":[{"message":{"content":"{\"findings\":[{\"blocking\":false,\"message\":\"The endpoint correctly handles malformed JSON input.\",\"severity\":\"low\"}]}"}}],"usage":{}}"#
+                }
             };
             let reply = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -451,7 +464,7 @@ fn requirements_orientation_is_framed_as_data_for_analysis() {
     assert!(error.is_none(), "review must reach the model: {:?}", error);
     assert!(matches!(result.status, ReviewStatus::Approved));
     let captured = requests.lock().expect("capture lock");
-    assert_eq!(captured.len(), 2);
+    assert_eq!(captured.len(), 4);
 
     let first_request: serde_json::Value =
         serde_json::from_str(&captured[0]).expect("provider request must be JSON");
@@ -490,8 +503,8 @@ fn requirements_orientation_is_framed_as_data_for_analysis() {
             .expect("generic review task must remain a separate context block")["content"]
     );
 
-    let second_request: serde_json::Value = serde_json::from_str(&captured[1]).unwrap();
-    let messages = second_request["messages"].as_array().unwrap();
+    let fourth_request: serde_json::Value = serde_json::from_str(&captured[3]).unwrap();
+    let messages = fourth_request["messages"].as_array().unwrap();
     assert!(
         messages
             .iter()
