@@ -511,7 +511,14 @@ fn build_tool_event_details(
     result: &crate::tools::ToolResult,
 ) -> Option<String> {
     let mut summary = serde_json::json!({"tool": tool});
-    summary["status"] = serde_json::Value::String(format!("{:?}", result.status));
+    summary["status"] = serde_json::Value::String(
+        match result.status {
+            crate::tools::ToolStatus::Succeeded => "Succeeded",
+            crate::tools::ToolStatus::Failed => "Failed",
+            crate::tools::ToolStatus::Denied => "Denied",
+        }
+        .into(),
+    );
     if let Some(path) = arguments.get("path").and_then(|v| v.as_str()) {
         summary["path"] = serde_json::Value::String(path.into());
     }
