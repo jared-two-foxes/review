@@ -11,10 +11,11 @@ use agent_kernel::{
     ledger::LedgerEvent,
     limits::Limits,
     model::{ModelProvider, ToolDescription, UsageRecord},
-    tools::{Tool, ToolCatalog, ToolResult, ToolStatus},
+    tools::{Tool, ToolResult, ToolStatus},
 };
 use agent_protocol::{Clock, IdGenerator, RandomIdGenerator, SystemClock};
 use code_agent_runtime::{
+    capabilities::{CodeToolCatalog, ReadOnly},
     provider::OpenAiProvider,
     repo::GitRepo,
     security::SecurityPolicy,
@@ -113,39 +114,39 @@ pub fn run_review_with_provider<P: ModelProvider>(
     drop(ref_repo);
 
     let byte_limit = 65_536usize;
-    let mut catalog = ToolCatalog::new();
-    catalog.register(Box::new(GetChangeSummaryTool::new(
+    let mut catalog = CodeToolCatalog::<ReadOnly>::new();
+    catalog.register(GetChangeSummaryTool::new(
         open_repo(path)?,
         base.clone(),
         head.clone(),
-    )));
-    catalog.register(Box::new(GetChangedFilesTool::new(
+    ));
+    catalog.register(GetChangedFilesTool::new(
         open_repo(path)?,
         base.clone(),
         head.clone(),
-    )));
-    catalog.register(Box::new(ReadDiffTool::new(
+    ));
+    catalog.register(ReadDiffTool::new(
         open_repo(path)?,
         base.clone(),
         head.clone(),
         byte_limit,
-    )));
-    catalog.register(Box::new(ReadFileTool::new(
+    ));
+    catalog.register(ReadFileTool::new(
         open_repo(path)?,
         head.clone(),
         byte_limit,
         SecurityPolicy::new(),
-    )));
-    catalog.register(Box::new(ListDirectoryTool::new(
+    ));
+    catalog.register(ListDirectoryTool::new(
         open_repo(path)?,
         head.clone(),
         SecurityPolicy::new(),
-    )));
-    catalog.register(Box::new(SearchTextTool::new(
+    ));
+    catalog.register(SearchTextTool::new(
         open_repo(path)?,
         head.clone(),
         SecurityPolicy::new(),
-    )));
+    ));
 
     let requirements = request
         .requirements
@@ -172,8 +173,13 @@ pub fn run_review_with_provider<P: ModelProvider>(
         max_input_tokens: config.max_input_tokens,
         max_cost_usd: config.max_cost_usd,
     };
-    let coordinator =
-        SessionCoordinator::new(app, provider, RandomIdGenerator::new(), catalog, limits);
+    let coordinator = SessionCoordinator::new(
+        app,
+        provider,
+        RandomIdGenerator::new(),
+        catalog.into_inner(),
+        limits,
+    );
     Ok(coordinator.run_full(request.clone(), cancel))
 }
 
@@ -535,7 +541,7 @@ impl AgentApplication for ReviewApplication {
 
     fn reduce_event(&self, state: &Self::State, event: &LedgerEvent) -> Self::State {
         let terminal_reason = match event.event_type.as_str() {
-            "kernel.tool_completed" => Some(ReviewReason::ReviewCompleted),
+            "kernel.tool_completed" => state.terminal_reason.clone(),
             "kernel.model_failed" => Some(ReviewReason::ModelFailure),
             "kernel.session_budget_exhausted" => Some(ReviewReason::BudgetExhausted),
             "kernel.session_stalled" => Some(ReviewReason::SessionStalled),
@@ -557,6 +563,7 @@ impl AgentApplication for ReviewApplication {
                 && let Ok(info) = serde_json::from_str::<serde_json::Value>(details)
             {
                 let tool = info["tool"].as_str().unwrap_or("");
+                let status = info["status"].as_str().unwrap_or("");
                 if (tool == "get_changed_files" || tool == "get_change_summary")
                     && let Some(files) = info["changed_files"].as_array()
                 {
@@ -566,13 +573,14 @@ impl AgentApplication for ReviewApplication {
                         }
                     }
                 }
-                if tool == "read_file" {
+                if tool == "read_file" && status == "Succeeded" {
                     has_read_file = true;
                 }
-                if tool == "list_directory" {
+                if tool == "list_directory" && status == "Succeeded" {
                     has_list_directory = true;
                 }
                 if (tool == "read_file" || tool == "read_diff" || tool == "list_directory")
+                    && status == "Succeeded"
                     && let Some(path) = info["path"].as_str()
                     && !inspected_paths.contains(&path.to_string())
                 {
@@ -794,19 +802,77 @@ mod tests {
         let initial = app.initialize(&request).unwrap().initial_state;
         let read_diff = LedgerEvent {
             event_type: "kernel.tool_completed".into(),
-            details: Some(r#"{"tool":"read_diff","path":"src/main.rs"}"#.into()),
+            details: Some(r#"{"tool":"read_diff","path":"src/main.rs","status":"Succeeded"}"#.into()),
             ..Default::default()
         };
         let after_diff = app.reduce_event(&initial, &read_diff);
         let read_file = LedgerEvent {
             event_type: "kernel.tool_completed".into(),
-            details: Some(r#"{"tool":"read_file","path":"src/main.rs"}"#.into()),
+            details: Some(r#"{"tool":"read_file","path":"src/main.rs","status":"Succeeded"}"#.into()),
             ..Default::default()
         };
         let reduced = app.reduce_event(&after_diff, &read_file);
 
         assert!(reduced.has_read_file);
         assert_eq!(reduced.inspected_paths, vec!["src/main.rs".to_string()]);
+    }
+
+    #[test]
+    fn reduce_event_requires_successful_exploratory_tools_for_coverage() {
+        let app = ReviewApplication::new_with_sources(
+            agent_protocol::FixedClock::new("2025-01-01T00:00:00Z"),
+            agent_protocol::SequenceIdGenerator::new(vec!["rev-001"]),
+        );
+        let request = ReviewRequest {
+            schema: "review.request/v1".into(),
+            repository_path: ".".into(),
+            base_ref: "HEAD~1".into(),
+            head_ref: "HEAD".into(),
+            requirements: None,
+        };
+        let initial = app.initialize(&request).unwrap().initial_state;
+        let failed_read = LedgerEvent {
+            event_type: "kernel.tool_completed".into(),
+            details: Some(r#"{"tool":"read_file","path":"src/main.rs","status":"Failed"}"#.into()),
+            ..Default::default()
+        };
+        let after_failed_read = app.reduce_event(&initial, &failed_read);
+        let denied_list = LedgerEvent {
+            event_type: "kernel.tool_completed".into(),
+            details: Some(
+                r#"{"tool":"list_directory","path":"src","status":"Denied"}"#.into(),
+            ),
+            ..Default::default()
+        };
+        let reduced = app.reduce_event(&after_failed_read, &denied_list);
+
+        assert!(!reduced.has_read_file);
+        assert!(!reduced.has_list_directory);
+        assert!(reduced.inspected_paths.is_empty());
+    }
+
+    #[test]
+    fn reduce_event_does_not_mark_review_completed_on_tool_completion() {
+        let app = ReviewApplication::new_with_sources(
+            agent_protocol::FixedClock::new("2025-01-01T00:00:00Z"),
+            agent_protocol::SequenceIdGenerator::new(vec!["rev-001"]),
+        );
+        let request = ReviewRequest {
+            schema: "review.request/v1".into(),
+            repository_path: ".".into(),
+            base_ref: "HEAD~1".into(),
+            head_ref: "HEAD".into(),
+            requirements: None,
+        };
+        let initial = app.initialize(&request).unwrap().initial_state;
+        let event = LedgerEvent {
+            event_type: "kernel.tool_completed".into(),
+            details: Some(r#"{"tool":"read_file","path":"src/main.rs","status":"Succeeded"}"#.into()),
+            ..Default::default()
+        };
+        let reduced = app.reduce_event(&initial, &event);
+
+        assert!(reduced.terminal_reason.is_none());
     }
 
     #[test]

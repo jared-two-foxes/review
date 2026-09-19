@@ -18,6 +18,6 @@ members = [
   "crates/review-app",
   "crates/review-cli",
   "crates/cli-common",
-  "crates/agent-kernel",
+  "crates/agent-kernel", "crates/implement-app",
 ]
 resolver = "2"
