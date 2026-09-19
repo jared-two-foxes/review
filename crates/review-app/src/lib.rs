@@ -32,6 +32,8 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
+const LARGE_CHANGE_THRESHOLD: usize = 20;
+
 pub struct ReviewConfig {
     pub api_key: String,
     pub model: String,
@@ -222,6 +224,8 @@ pub struct ReviewState {
     inspected_paths: Vec<String>,
     has_truncated_search: bool,
     terminal_reason: Option<ReviewReason>,
+    has_read_file: bool,
+    has_list_directory: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -306,6 +310,8 @@ impl AgentApplication for ReviewApplication {
                 inspected_paths: vec![],
                 has_truncated_search: false,
                 terminal_reason: None,
+                has_read_file: false,
+                has_list_directory: false,
             },
             requested_tools: vec![
                 "get_change_summary".into(),
@@ -366,28 +372,47 @@ impl AgentApplication for ReviewApplication {
             };
         }
 
-        // Gate 2: all change files must have been inspected by a read tool.
-        let uncovered: Vec<String> = state
-            .changed_files
-            .iter()
-            .filter(|path| !state.inspected_paths.contains(path))
-            .cloned()
-            .collect();
-
-        if !uncovered.is_empty() {
-            return CompletionDecision::RejectedRemediable {
-                reason_codes: vec!["change_not_fully_inspected".into()],
-                missing_requirements: vec![format!(
-                    "The following changed files have not been inspected: {}",
-                    uncovered.join(", ")
-                )],
-                feedback_for_model: vec![InstructionBlock {
-                    content: format!(
-                        "You must read all changed files before completing. The following files have not been inspected: {}",
+        // Gate 2: change file coverage.
+        if state.changed_files.len() > LARGE_CHANGE_THRESHOLD {
+            // Relaxed: require exploratory coverage
+            if !state.has_read_file || !state.has_list_directory {
+                return CompletionDecision::RejectedRemediable {
+                    reason_codes: vec!["insufficient_exploration".into()],
+                    missing_requirements: vec![format!(
+                        "The change involves {} files.  You must call list_directory and read_file atleast once before completing.",
+                        state.changed_files.len()
+                    )],
+                    feedback_for_model: vec![InstructionBlock {
+                        content: format!(
+                            "This is a large change ({} files).  Call list_directory to understand the structure and read_file on relevant files before completing.",
+                            state.changed_files.len()
+                        ),
+                    }],
+                };
+            }
+        } else {
+            // Strict: every changed file must be inspected.
+            let uncovered: Vec<String> = state
+                .changed_files
+                .iter()
+                .filter(|path| !state.inspected_paths.contains(path))
+                .cloned()
+                .collect();
+            if !uncovered.is_empty() {
+                return CompletionDecision::RejectedRemediable {
+                    reason_codes: vec!["change_not_fully_inspected".into()],
+                    missing_requirements: vec![format!(
+                        "The following changed files have not been inspected: {}",
                         uncovered.join(", ")
-                    ),
-                }],
-            };
+                    )],
+                    feedback_for_model: vec![InstructionBlock {
+                        content: format!(
+                            "You must read all changed files before completing. The following files have not been inspected: {}",
+                            uncovered.join(", ")
+                        ),
+                    }],
+                };
+            }
         }
 
         // gate 3: if requirements were provided, the model must reference them.
@@ -524,6 +549,8 @@ impl AgentApplication for ReviewApplication {
             let mut changed_files = state.changed_files.clone();
             let mut inspected_paths = state.inspected_paths.clone();
             let mut has_truncated_search = state.has_truncated_search;
+            let mut has_read_file = state.has_read_file;
+            let mut has_list_directory = state.has_list_directory;
 
             // Parse the tool event details JSON to track what was inspected
             if let Some(details) = &event.details
@@ -531,7 +558,7 @@ impl AgentApplication for ReviewApplication {
             {
                 let tool = info["tool"].as_str().unwrap_or("");
                 if tool == "get_changed_files"
-                    && let Some(files) = info["files"].as_array()
+                    && let Some(files) = info["changed_files"].as_array()
                 {
                     for path in files.iter().filter_map(|f| f.as_str()) {
                         if !changed_files.contains(&path.to_string()) {
@@ -543,6 +570,12 @@ impl AgentApplication for ReviewApplication {
                     && let Some(path) = info["path"].as_str()
                     && !inspected_paths.contains(&path.to_string())
                 {
+                    if tool == "read_file" {
+                        has_read_file = true;
+                    }
+                    if tool == "list_directory" {
+                        has_list_directory = true;
+                    }
                     inspected_paths.push(path.to_string());
                 }
                 if tool == "search_text"
@@ -562,6 +595,8 @@ impl AgentApplication for ReviewApplication {
                 inspected_paths,
                 has_truncated_search,
                 terminal_reason,
+                has_read_file,
+                has_list_directory,
             }
         } else {
             ReviewState {
@@ -572,6 +607,8 @@ impl AgentApplication for ReviewApplication {
                 inspected_paths: state.inspected_paths.clone(),
                 has_truncated_search: state.has_truncated_search,
                 terminal_reason,
+                has_read_file: state.has_read_file,
+                has_list_directory: state.has_list_directory,
             }
         }
     }
@@ -683,6 +720,163 @@ impl Tool for ReadChangeTool {
             status: ToolStatus::Succeeded,
             value: json!({"summary": "Modified file.rs: changed
  function signature"}),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reduce_event_populates_changed_files_from_changed_files_key() {
+        let app = ReviewApplication::new_with_sources(
+            agent_protocol::FixedClock::new("2025-01-01T00:00:00Z"),
+            agent_protocol::SequenceIdGenerator::new(vec!["rev-001"]),
+        );
+        let request = ReviewRequest {
+            schema: "review.request/v1".into(),
+            repository_path: ".".into(),
+            base_ref: "HEAD~1".into(),
+            head_ref: "HEAD".into(),
+            requirements: None,
+        };
+        let initial = app.initialize(&request).unwrap().initial_state;
+        let event = LedgerEvent {
+            event_type: "kernel.tool_completed".into(),
+            details: Some(r#"{"tool":"get_changed_files","changed_files":["src/main.rs"]}"#.into()),
+            ..Default::default()
+        };
+        let reduced = app.reduce_event(&initial, &event);
+
+        assert!(reduced.changed_files.contains(&"src/main.rs".to_string()));
+    }
+
+    #[test]
+    fn relaxed_mode_still_rejects_findings_on_uninspected_paths() {
+        let app = ReviewApplication::new_with_sources(
+            agent_protocol::FixedClock::new("2025-01-01T00:00:00Z"),
+            agent_protocol::SequenceIdGenerator::new(vec!["rev-001"]),
+        );
+        // 21 changed files (> threshold), both exploratory tools called
+        let changed_files: Vec<String> = (0..21).map(|i| format!("src/file_{i}.rs")).collect();
+        let state = ReviewState {
+            inspected: true,
+            findings: vec![],
+            requirements: None,
+            changed_files,
+            inspected_paths: vec!["src/file_0.rs".into()], // only one inspected
+            has_truncated_search: false,
+            terminal_reason: None,
+            has_read_file: true,
+            has_list_directory: true,
+        };
+        let completion = ReviewCompletion {
+            findings: vec![Finding {
+                blocking: false,
+                message: "issue found".into(),
+                path: Some("src/file_5.rs".into()), // NOT in inspected_paths
+                line: None,
+                severity: "low".into(),
+                recommendation: None,
+            }],
+        };
+        match app.validate_completion(&state, &completion) {
+            CompletionDecision::RejectedRemediable { reason_codes, .. } => {
+                assert!(
+                    reason_codes
+                        .iter()
+                        .any(|c| c == "finding_not_evidence_backed"),
+                    "Gate 4 must still reject uninspected paths in relaxed mode: {reason_codes:?}"
+                );
+            }
+            other => panic!("Gate 4 must reject, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn relaxed_mode_accepts_with_exploratory_coverage() {
+        let app = ReviewApplication::new_with_sources(
+            agent_protocol::FixedClock::new("2025-01-01T00:00:00Z"),
+            agent_protocol::SequenceIdGenerator::new(vec!["rev-001"]),
+        );
+        let changed_files: Vec<String> = (0..21).map(|i| format!("src/file_{i}.rs")).collect();
+        let state = ReviewState {
+            inspected: true,
+            findings: vec![],
+            requirements: None,
+            changed_files,
+            inspected_paths: vec!["src/file_0.rs".into()],
+            has_truncated_search: false,
+            terminal_reason: None,
+            has_read_file: true,
+            has_list_directory: true,
+        };
+        let completion = ReviewCompletion {
+            findings: vec![Finding {
+                blocking: false,
+                message: "looks good".into(),
+                path: Some("src/file_0.rs".into()),
+                line: None,
+                severity: "low".into(),
+                recommendation: None,
+            }],
+        };
+        assert!(
+            matches!(
+                app.validate_completion(&state, &completion),
+                CompletionDecision::Accepted
+            ),
+            "relaxed mode with both exploratory calls should accept"
+        );
+    }
+
+    #[test]
+    fn strict_mode_rejects_uninspected_changed_file() {
+        let app = ReviewApplication::new_with_sources(
+            agent_protocol::FixedClock::new("2025-01-01T00:00:00Z"),
+            agent_protocol::SequenceIdGenerator::new(vec!["rev-001"]),
+        );
+        let changed_files: Vec<String> = (0..3).map(|i| format!("src/file_{i}.rs")).collect();
+        let state = ReviewState {
+            inspected: true,
+            findings: vec![],
+            requirements: None,
+            changed_files: changed_files.clone(),
+            inspected_paths: vec!["src/file_0.rs".into(), "src/file_1.rs".into()],
+            has_truncated_search: false,
+            terminal_reason: None,
+            has_read_file: true,
+            has_list_directory: true,
+        };
+        let completion = ReviewCompletion {
+            findings: vec![Finding {
+                blocking: false,
+                message: "ok".into(),
+                path: Some("src/file_0.rs".into()),
+                line: None,
+                severity: "low".into(),
+                recommendation: None,
+            }],
+        };
+        match app.validate_completion(&state, &completion) {
+            CompletionDecision::RejectedRemediable {
+                reason_codes,
+                missing_requirements,
+                ..
+            } => {
+                assert!(
+                    reason_codes
+                        .iter()
+                        .any(|c| c == "change_not_fully_inspected")
+                );
+                assert!(
+                    missing_requirements
+                        .iter()
+                        .any(|r| r.contains("src/file_2.rs"))
+                );
+            }
+            other => panic!("strict mode should reject uninspected file, got {other:?}"),
         }
     }
 }
