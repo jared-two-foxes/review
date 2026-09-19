@@ -13,32 +13,24 @@ use review_app::{ReadChangeTool, ReviewApplication};
 use review_protocol::{ReviewRequest, ReviewResult};
 use serde_json::json;
 
-fn normalize_line_endings(bytes: &[u8]) -> Vec<u8> {
-    String::from_utf8_lossy(bytes)
-        .replace("\r\n", "\n")
-        .into_bytes()
-}
-
 fn assert_golden(events: &[LedgerEvent], result: &ReviewResult, scenario: u32) {
-    let actual_events = normalize_line_endings(&serde_json::to_vec_pretty(events).unwrap());
+    let actual_events = serde_json::to_vec_pretty(events).unwrap();
     let golden_events = fs::read(format!(
         "tests/fixtures/v1/golden-events-scenario-{scenario}.json"
     ))
     .unwrap();
     assert_eq!(
-        actual_events,
-        normalize_line_endings(&golden_events),
+        actual_events, golden_events,
         "events mismatch for scenario {scenario}"
     );
 
-    let actual_result = normalize_line_endings(&serde_json::to_vec_pretty(result).unwrap());
+    let actual_result = serde_json::to_vec_pretty(result).unwrap();
     let golden_result = fs::read(format!(
         "tests/fixtures/v1/golden-result-scenario-{scenario}.json"
     ))
     .unwrap();
     assert_eq!(
-        actual_result,
-        normalize_line_endings(&golden_result),
+        actual_result, golden_result,
         "result mismatch for scenario {scenario}"
     );
 }
