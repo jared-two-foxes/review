@@ -302,9 +302,9 @@ fn parse_flag_value<T: std::str::FromStr>(
 }
 
 fn exit_code_for_result(result: &implement_app::ImplementResult) -> i32 {
-    match result.reason {
+    match &result.reason {
         ImplementReason::Cancelled => cli_common::ExitCode::Cancellation as i32,
-        _ => match result.status {
+        _ => match &result.status {
             ImplementStatus::CandidateReady => 0,
             ImplementStatus::Indeterminate => cli_common::ExitCode::Indeterminate as i32,
         },
