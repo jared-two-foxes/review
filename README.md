@@ -30,6 +30,7 @@ The main crates are:
 - `crates/review-cli` — CLI entrypoint and argument parsing
 - `crates/review-app` — review-specific behavior, completion rules, and built-in review skills
 - `crates/implement-app` — proof-of-concept second consumer for scoped-write implementation flows
+- `crates/implement-cli` — CLI entrypoint for implement-app
 - `crates/agent-kernel` — generic bounded model/tool orchestration
 - `crates/code-agent-runtime` — repository access, diffs, security boundaries, and model provider integration
 - `crates/review-protocol` — request/result/error types and JSON Schema generation
@@ -58,7 +59,7 @@ The runtime includes explicit safety constraints, including denied sensitive pat
 
 ## CLI shape
 
-The main entrypoint is the `review-cli` binary with a `run` command. It supports either:
+The `review-cli` binary supports either:
 
 - a JSON request file via `--request`
 - or demo-style request construction via flags like `--repository`, `--base-ref`, and `--head-ref`
@@ -83,6 +84,11 @@ Provider routing is model-driven:
 - `--model opencode/<model-name>` routes to OpenCode (`https://api.opencode.ai/v1/chat/completions`, `OPENCODE_API_KEY`)
 - `--model copilot/<model-name>` or `--model github-copilot/<model-name>` routes to GitHub Copilot (`GITHUB_TOKEN`)
 
+The `implement-cli` binary follows the same provider-routing model and runtime flags, but builds `ImplementRequest` values instead. It supports either:
+
+- a JSON request file via `--request`
+- or demo-style request construction via flags like `--repository`, `--target-path`, `--expected-content`, and `--desired-content`
+
 ## Example usage
 
 Run the CLI against a request fixture:
@@ -98,6 +104,17 @@ cargo run -p review-cli -- run \
   --repository . \
   --base-ref HEAD~1 \
   --head-ref HEAD \
+  --format json
+```
+
+Run the implement CLI by constructing an implementation request from flags:
+
+```bash
+cargo run -p implement-cli -- run \
+  --repository . \
+  --target-path README.md \
+  --expected-content "before" \
+  --desired-content "after" \
   --format json
 ```
 
