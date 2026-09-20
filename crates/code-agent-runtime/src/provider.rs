@@ -20,10 +20,15 @@ pub fn resolve_provider_route(
 ) -> Result<ProviderRoute, String> {
     let parsed = model
         .split_once('/')
-        .map(|(p, m)| (p.to_ascii_lowercase(), m))
-        .filter(|(_, m)| !m.is_empty());
+        .map(|(p, m)| (p.to_ascii_lowercase(), m));
 
     if let Some((provider, provider_model)) = parsed {
+        if provider_model.is_empty() {
+            return Err(format!(
+                "model provider prefix '{}' requires a non-empty model name",
+                provider
+            ));
+        }
         let (default_base_url, default_api_key) = match provider.as_str() {
             "openai" => (
                 "https://api.openai.com/v1/chat/completions",

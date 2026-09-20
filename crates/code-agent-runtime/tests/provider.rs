@@ -58,6 +58,17 @@ fn model_prefix_routing_rejects_unknown_provider_prefixes() {
 }
 
 #[test]
+fn model_prefix_routing_rejects_empty_provider_model_suffixes() {
+    let openai_error = resolve_provider_route("openai/", None, None)
+        .expect_err("empty provider-qualified model suffix must fail validation");
+    assert!(openai_error.contains("requires a non-empty model name"));
+
+    let anthropic_error = resolve_provider_route("anthropic/", None, None)
+        .expect_err("empty provider-qualified model suffix must fail validation");
+    assert!(anthropic_error.contains("requires a non-empty model name"));
+}
+
+#[test]
 fn openai_provider_round_trips_canonical_request_and_tool_call() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test provider");
     let address = listener.local_addr().expect("read test provider address");
