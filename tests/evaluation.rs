@@ -307,31 +307,47 @@ fn evaluates_each_seeded_repository_with_scripted_provider() {
         } else {
             json!([])
         };
-        let provider = ScriptedModelProvider::new(vec![
-            CanonicalModelResponse {
+        // Build scripted responses: get_change_summary, then read_file for
+        // each changed file (Gate 2 requires all changed files to be
+        // inspected), then the completion.
+        let mut responses = vec![CanonicalModelResponse {
+            actions: vec![ModelAction::ToolCall {
+                action_id: "inspect".into(),
+                tool: "get_change_summary".into(),
+                arguments: json!({}),
+            }],
+            usage: Some(UsageRecord {
+                input_tokens: 1,
+                output_tokens: 1,
+                estimated_cost_usd: None,
+            }),
+        }];
+        for (i, (path, _)) in fixture.head.iter().enumerate() {
+            responses.push(CanonicalModelResponse {
                 actions: vec![ModelAction::ToolCall {
-                    action_id: "inspect".into(),
-                    tool: "get_change_summary".into(),
-                    arguments: json!({}),
+                    action_id: format!("read-{i}"),
+                    tool: "read_file".into(),
+                    arguments: json!({"path": path}),
                 }],
                 usage: Some(UsageRecord {
                     input_tokens: 1,
                     output_tokens: 1,
                     estimated_cost_usd: None,
                 }),
-            },
-            CanonicalModelResponse {
-                actions: vec![ModelAction::CompletionRequest {
-                    action_id: "complete".into(),
-                    payload: json!({"findings": scripted_findings}),
-                }],
-                usage: Some(UsageRecord {
-                    input_tokens: 1,
-                    output_tokens: 1,
-                    estimated_cost_usd: None,
-                }),
-            },
-        ]);
+            });
+        }
+        responses.push(CanonicalModelResponse {
+            actions: vec![ModelAction::CompletionRequest {
+                action_id: "complete".into(),
+                payload: json!({"findings": scripted_findings}),
+            }],
+            usage: Some(UsageRecord {
+                input_tokens: 1,
+                output_tokens: 1,
+                estimated_cost_usd: None,
+            }),
+        });
+        let provider = ScriptedModelProvider::new(responses);
 
         let (result, events) = run_review_with_provider(&request, &config, provider, None)
             .expect("scripted provider should run without a network or API key");
@@ -345,9 +361,10 @@ fn evaluates_each_seeded_repository_with_scripted_provider() {
             .expect("review status is a string");
         let findings = result_json["findings"].clone();
         let matches_expectation = actual_verdict == fixture.expected_verdict;
+        let expected_tool_calls = 1 + fixture.head.len();
         assert_eq!(
-            tool_call_count, 1,
-            "{} should dispatch the scripted inspection",
+            tool_call_count, expected_tool_calls,
+            "{} should dispatch get_change_summary plus one read_file per changed file",
             fixture.name
         );
         assert_eq!(actual_verdict, fixture.expected_verdict);

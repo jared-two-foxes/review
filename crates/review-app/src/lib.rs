@@ -802,13 +802,17 @@ mod tests {
         let initial = app.initialize(&request).unwrap().initial_state;
         let read_diff = LedgerEvent {
             event_type: "kernel.tool_completed".into(),
-            details: Some(r#"{"tool":"read_diff","path":"src/main.rs","status":"Succeeded"}"#.into()),
+            details: Some(
+                r#"{"tool":"read_diff","path":"src/main.rs","status":"Succeeded"}"#.into(),
+            ),
             ..Default::default()
         };
         let after_diff = app.reduce_event(&initial, &read_diff);
         let read_file = LedgerEvent {
             event_type: "kernel.tool_completed".into(),
-            details: Some(r#"{"tool":"read_file","path":"src/main.rs","status":"Succeeded"}"#.into()),
+            details: Some(
+                r#"{"tool":"read_file","path":"src/main.rs","status":"Succeeded"}"#.into(),
+            ),
             ..Default::default()
         };
         let reduced = app.reduce_event(&after_diff, &read_file);
@@ -839,9 +843,7 @@ mod tests {
         let after_failed_read = app.reduce_event(&initial, &failed_read);
         let denied_list = LedgerEvent {
             event_type: "kernel.tool_completed".into(),
-            details: Some(
-                r#"{"tool":"list_directory","path":"src","status":"Denied"}"#.into(),
-            ),
+            details: Some(r#"{"tool":"list_directory","path":"src","status":"Denied"}"#.into()),
             ..Default::default()
         };
         let reduced = app.reduce_event(&after_failed_read, &denied_list);
@@ -867,7 +869,9 @@ mod tests {
         let initial = app.initialize(&request).unwrap().initial_state;
         let event = LedgerEvent {
             event_type: "kernel.tool_completed".into(),
-            details: Some(r#"{"tool":"read_file","path":"src/main.rs","status":"Succeeded"}"#.into()),
+            details: Some(
+                r#"{"tool":"read_file","path":"src/main.rs","status":"Succeeded"}"#.into(),
+            ),
             ..Default::default()
         };
         let reduced = app.reduce_event(&initial, &event);

@@ -292,9 +292,7 @@ impl AgentApplication for ImplementApplication {
                 }
             }
 
-            if path == state.target_path
-                && tool == "replace_file_content"
-                && status == "Succeeded"
+            if path == state.target_path && tool == "replace_file_content" && status == "Succeeded"
             {
                 if !state.inspected {
                     next.mutation_before_inspection = true;
@@ -396,18 +394,22 @@ impl AgentApplication for ImplementApplication {
             reason: if accepted {
                 ImplementReason::CandidateReady
             } else {
-                state.terminal_reason
+                state
+                    .terminal_reason
                     .clone()
                     .unwrap_or(ImplementReason::CandidateNotReady)
             },
             implementation_id: self.id_gen.borrow_mut().next_id(),
             completed_at: self.clock.borrow().now(),
             target_path: state.target_path.clone(),
-            summary: pending.as_ref().map(|completion| completion.summary.clone()).or_else(|| {
-                state
-                    .mutation_before_inspection
-                    .then_some("Ordering violation: mutation_applied_before_inspection".into())
-            }),
+            summary: pending
+                .as_ref()
+                .map(|completion| completion.summary.clone())
+                .or_else(|| {
+                    state
+                        .mutation_before_inspection
+                        .then_some("Ordering violation: mutation_applied_before_inspection".into())
+                }),
             applied: state.mutation_applied,
             verified: state.verified,
             usage: ImplementUsageSummary {
@@ -579,7 +581,10 @@ mod tests {
                 summary: "Updated src/app.txt".into(),
             },
         );
-        assert!(matches!(decision, CompletionDecision::RejectedTerminal { .. }));
+        assert!(matches!(
+            decision,
+            CompletionDecision::RejectedTerminal { .. }
+        ));
 
         let result = app.build_terminal_result(
             &state,
