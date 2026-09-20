@@ -92,6 +92,91 @@ fn request_with_unknown_fields_is_rejected_as_typed_validation_error() {
 }
 
 #[test]
+fn request_with_empty_target_path_is_rejected_as_typed_validation_error() {
+    let request_path = std::env::temp_dir().join(format!(
+        "implement-cli-empty-target-request-{}.json",
+        std::process::id()
+    ));
+    std::fs::write(
+        &request_path,
+        r#"{
+  "repository_path": ".",
+  "target_path": "   ",
+  "expected_content": "before",
+  "desired_content": "after"
+}"#,
+    )
+    .expect("write invalid request fixture");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_implement-cli"))
+        .args([
+            "run",
+            "--request",
+            request_path.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("implement CLI should be executable");
+    std::fs::remove_file(&request_path).ok();
+
+    let error: Value = serde_json::from_slice(&output.stdout)
+        .expect("request with empty target path should emit a JSON error envelope");
+    assert_eq!(error["schema_version"], "agent.error/v1");
+    assert_eq!(error["category"], "validation");
+    assert_eq!(error["code"], "INVALID_REQUEST");
+    assert_eq!(error["message"], "target_path must not be empty");
+    assert_eq!(
+        output.status.code(),
+        Some(cli_common::ExitCode::InvalidRequest as i32)
+    );
+}
+
+#[test]
+fn request_with_identical_expected_and_desired_content_is_rejected_as_typed_validation_error() {
+    let request_path = std::env::temp_dir().join(format!(
+        "implement-cli-identical-content-request-{}.json",
+        std::process::id()
+    ));
+    std::fs::write(
+        &request_path,
+        r#"{
+  "repository_path": ".",
+  "target_path": "README.md",
+  "expected_content": "same",
+  "desired_content": "same"
+}"#,
+    )
+    .expect("write invalid request fixture");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_implement-cli"))
+        .args([
+            "run",
+            "--request",
+            request_path.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("implement CLI should be executable");
+    std::fs::remove_file(&request_path).ok();
+
+    let error: Value = serde_json::from_slice(&output.stdout)
+        .expect("request with identical contents should emit a JSON error envelope");
+    assert_eq!(error["schema_version"], "agent.error/v1");
+    assert_eq!(error["category"], "validation");
+    assert_eq!(error["code"], "INVALID_REQUEST");
+    assert_eq!(
+        error["message"],
+        "expected_content and desired_content must differ"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(cli_common::ExitCode::InvalidRequest as i32)
+    );
+}
+
+#[test]
 fn invalid_numeric_flags_are_rejected_as_typed_validation_errors() {
     let output = Command::new(env!("CARGO_BIN_EXE_implement-cli"))
         .args([

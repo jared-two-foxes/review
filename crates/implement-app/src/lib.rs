@@ -70,6 +70,22 @@ pub fn run_implement(
     run_implement_with_provider(request, config, provider, cancel)
 }
 
+pub fn validate_request(request: &ImplementRequest) -> Result<(), String> {
+    if !Path::new(&request.repository_path).exists() {
+        return Err(format!(
+            "repository path does not exist: {}",
+            request.repository_path
+        ));
+    }
+    if request.target_path.trim().is_empty() {
+        return Err("target_path must not be empty".into());
+    }
+    if request.expected_content == request.desired_content {
+        return Err("expected_content and desired_content must differ".into());
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ImplementRequest {
@@ -225,21 +241,7 @@ impl AgentApplication for ImplementApplication {
     }
 
     fn validate_request(&self, request: &Self::Request) -> Result<(), Self::Error> {
-        if !Path::new(&request.repository_path).exists() {
-            return Err(ImplementError(format!(
-                "repository path does not exist: {}",
-                request.repository_path
-            )));
-        }
-        if request.target_path.trim().is_empty() {
-            return Err(ImplementError("target_path must not be empty".into()));
-        }
-        if request.expected_content == request.desired_content {
-            return Err(ImplementError(
-                "expected_content and desired_content must differ".into(),
-            ));
-        }
-        Ok(())
+        validate_request(request).map_err(ImplementError)
     }
 
     fn initialize(

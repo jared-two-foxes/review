@@ -206,6 +206,15 @@ fn main() {
         max_cost_usd,
     };
 
+    if let Err(message) = implement_app::validate_request(&request) {
+        emit_error(
+            "INVALID_REQUEST",
+            "validation",
+            &message,
+            cli_common::ExitCode::InvalidRequest as i32,
+        );
+    }
+
     let cancellation_token = Arc::new(AtomicBool::new(false));
     let token_clone = Arc::clone(&cancellation_token);
     if let Err(error) = ctrlc::set_handler(move || {
