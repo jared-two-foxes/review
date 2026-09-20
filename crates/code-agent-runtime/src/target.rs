@@ -12,6 +12,8 @@ pub enum ReviewTarget {
     WorkingDirectory,
     /// Review against the git index (staged changes).
     Index,
+    /// Represents an empty state, useful for initial comparisons.
+    Empty,
 }
 
 impl ReviewTarget {
@@ -19,11 +21,13 @@ impl ReviewTarget {
     ///
     /// - `:working` -> working directory
     /// - `:staged` -> git index
+    /// - `:empty` -> empty tree
     /// - any other string -> resolved as a git ref (e.g. `HEAD`, `HEAD~1`, a branch name).
     pub fn parse(repo: &GitRepo, ref_str: &str) -> Result<Self, RepoError> {
         match ref_str {
             ":working" => Ok(ReviewTarget::WorkingDirectory),
             ":staged" => Ok(ReviewTarget::Index),
+            ":empty" => Ok(ReviewTarget::Empty),
             _ => {
                 let oid = repo.revparse_single(ref_str)?.id();
                 Ok(ReviewTarget::Commit(oid))
@@ -41,6 +45,7 @@ impl ReviewTarget {
                 Ok(oid) => oid.to_string(),
                 Err(_) => "index-unknown".to_string(),
             },
+            ReviewTarget::Empty => "empty".to_string(),
         }
     }
 
@@ -68,6 +73,9 @@ impl ReviewTarget {
                 let blob = repo.raw_repo().find_blob(entry.id)?;
                 Ok(blob.content().to_vec())
             }
+            ReviewTarget::Empty => Err(RepoError::Other(
+                "cannot read files from empty review target".into(),
+            )),
         }
     }
 }
