@@ -9,6 +9,7 @@ use agent_kernel::model::{ModelProvider, UsageRecord};
 use agent_protocol::{Clock, IdGenerator, RandomIdGenerator, SystemClock};
 use code_agent_runtime::capabilities::{CodeToolCatalog, ScopedWrite};
 use code_agent_runtime::identity::content_id_for_bytes;
+use code_agent_runtime::provider::{OpenAiProvider, resolve_provider_route};
 use code_agent_runtime::repo::GitRepo;
 use code_agent_runtime::security::SecurityPolicy;
 use code_agent_runtime::target::ReviewTarget;
@@ -21,6 +22,9 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 pub struct ImplementConfig {
+    pub api_key: Option<String>,
+    pub model: String,
+    pub base_url: Option<String>,
     pub max_turns: u32,
     pub max_tool_calls: u32,
     pub max_completion_attempts: u32,
@@ -34,6 +38,9 @@ pub struct ImplementConfig {
 impl Default for ImplementConfig {
     fn default() -> Self {
         Self {
+            api_key: None,
+            model: "gpt-4o".to_string(),
+            base_url: None,
             max_turns: 10,
             max_tool_calls: 10,
             max_completion_attempts: 3,
@@ -42,6 +49,23 @@ impl Default for ImplementConfig {
             max_repeated_actions: 3,
             max_input_tokens: None,
             max_cost_usd: None,
+        }
+
+        pub fn run_implement(
+            request: &ImplementRequest,
+            config: &ImplementConfig,
+            cancel: Option<&AtomicBool>,
+        ) -> Result<(ImplementResult, Vec<LedgerEvent>), String> {
+            let route = resolve_provider_route(
+                config.model.as_str(),
+                config.base_url.as_deref(),
+                config.api_key.as_deref(),
+            )?;
+            if route.api_key.is_empty() {
+                return Err("missing API key".into());
+            }
+            let provider = OpenAiProvider::new(route.base_url, route.api_key, route.model);
+            run_implement_with_provider(request, config, provider, cancel)
         }
     }
 }

@@ -1,3 +1,4 @@
+use code_agent_runtime::provider::resolve_provider_route;
 use review_app::ReviewConfig;
 use review_protocol::{ReviewRequest, ReviewStatus};
 use std::path::Path;
@@ -169,7 +170,7 @@ fn main() {
     })
     .expect("set Ctrl-C handler");
 
-    let route = match resolve_provider_route(&model, base_url.as_deref()) {
+    let route = match resolve_provider_route(&model, base_url.as_deref(), None) {
         Ok(route) => route,
         Err(message) => emit_error("INVALID_ARGUMENTS", &message),
     };
@@ -226,55 +227,4 @@ fn flag_value(args: &[String], index: usize, flag: &str) -> String {
             );
         }
     }
-}
-
-struct ProviderRoute {
-    model: String,
-    base_url: String,
-    api_key: String,
-}
-
-fn resolve_provider_route(
-    model: &str,
-    explicit_base_url: Option<&str>,
-) -> Result<ProviderRoute, String> {
-    let parsed = model
-        .split_once('/')
-        .map(|(p, m)| (p.to_ascii_lowercase(), m))
-        .filter(|(_, m)| !m.is_empty());
-
-    if let Some((provider, provider_model)) = parsed {
-        let (default_base_url, api_key) = match provider.as_str() {
-            "ollama" => (
-                "http://127.0.0.1:11434/v1/chat/completions",
-                std::env::var("OLLAMA_API_KEY").unwrap_or_else(|_| "ollama".into()),
-            ),
-            "copilot" | "github-copilot" => (
-                "https://api.githubcopilot.com/chat/completions",
-                std::env::var("GITHUB_TOKEN")
-                    .or_else(|_| std::env::var("GITHUB_COPILOT_API_KEY"))
-                    .unwrap_or_default(),
-            ),
-            _ => {
-                return Err(format!(
-                    "unsupported model provider prefix '{}'; supported prefixes are ollama/, copilot/, github-copilot/",
-                    provider
-                ));
-            }
-        };
-
-        return Ok(ProviderRoute {
-            model: provider_model.to_string(),
-            base_url: explicit_base_url.unwrap_or(default_base_url).to_string(),
-            api_key,
-        });
-    }
-
-    let default_base_url = "https://api.openai.com/v1/chat/completions";
-    let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
-    Ok(ProviderRoute {
-        model: model.to_string(),
-        base_url: explicit_base_url.unwrap_or(default_base_url).to_string(),
-        api_key,
-    })
 }
