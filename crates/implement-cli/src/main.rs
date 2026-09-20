@@ -49,6 +49,7 @@ fn main() {
                         "UNSUPPORTED_FORMAT",
                         "validation",
                         &format!("unsupported format: {} (only json is supported)", value),
+                        cli_common::ExitCode::InvalidRequest as i32,
                     );
                 }
                 i += 1;
@@ -62,21 +63,34 @@ fn main() {
                 i += 1;
             }
             "--max-turns" => {
-                max_turns = flag_value(&args, i, "--max-turns").parse().unwrap_or(10);
+                max_turns = parse_flag_value(&args, i, "--max-turns", "INVALID_MAX_TURNS");
                 i += 1;
             }
             "--wall-clock-budget-secs" => {
-                wall_clock_budget_secs = flag_value(&args, i, "--wall-clock-budget-secs")
-                    .parse()
-                    .unwrap_or(60);
+                wall_clock_budget_secs = parse_flag_value(
+                    &args,
+                    i,
+                    "--wall-clock-budget-secs",
+                    "INVALID_WALL_CLOCK_BUDGET",
+                );
                 i += 1;
             }
             "--max-input-tokens" => {
-                max_input_tokens = flag_value(&args, i, "--max-input-tokens").parse().ok();
+                max_input_tokens = Some(parse_flag_value(
+                    &args,
+                    i,
+                    "--max-input-tokens",
+                    "INVALID_MAX_INPUT_TOKENS",
+                ));
                 i += 1;
             }
             "--max-cost-usd" => {
-                max_cost_usd = flag_value(&args, i, "--max-cost-usd").parse().ok();
+                max_cost_usd = Some(parse_flag_value(
+                    &args,
+                    i,
+                    "--max-cost-usd",
+                    "INVALID_MAX_COST_USD",
+                ));
                 i += 1;
             }
             "--emit-events" => {
@@ -102,7 +116,12 @@ fn main() {
                 ledger_path = Some(flag_value(&args, i, "--ledger"));
                 i += 1;
             }
-            _ => {}
+            _ => emit_error(
+                "UNRECOGNIZED_ARGUMENT",
+                "validation",
+                &format!("unrecognized argument: {}", args[i]),
+                cli_common::ExitCode::InvalidRequest as i32,
+            ),
         }
         i += 1;
     }
@@ -122,7 +141,12 @@ fn main() {
     let request: ImplementRequest = if let Some(path) = request_path {
         let bytes = match cli_common::read_request(Path::new(&path)) {
             Ok(bytes) => bytes,
-            Err(error) => emit_error("REQUEST_READ_FAILED", "validation", &error.to_string()),
+            Err(error) => emit_error(
+                "REQUEST_READ_FAILED",
+                "validation",
+                &error.to_string(),
+                cli_common::ExitCode::InvalidRequest as i32,
+            ),
         };
         match cli_common::parse_strict_json(&bytes) {
             Ok(request) => request,
@@ -131,6 +155,7 @@ fn main() {
                     "REQUEST_PARSE_FAILED",
                     "validation",
                     "request is not valid JSON",
+                    cli_common::ExitCode::InvalidRequest as i32,
                 );
             }
             Err(cli_common::ParseError::DuplicateKey(key)) => {
@@ -138,6 +163,7 @@ fn main() {
                     "DUPLICATE_KEY",
                     "validation",
                     &format!("duplicate key: {}", key),
+                    cli_common::ExitCode::InvalidRequest as i32,
                 );
             }
         }
@@ -182,20 +208,39 @@ fn main() {
 
     let cancellation_token = Arc::new(AtomicBool::new(false));
     let token_clone = Arc::clone(&cancellation_token);
-    ctrlc::set_handler(move || {
+    if let Err(error) = ctrlc::set_handler(move || {
         token_clone.store(true, Ordering::Relaxed);
-    })
-    .expect("set Ctrl-C handler");
+    }) {
+        emit_error(
+            "SIGNAL_HANDLER_INSTALL_FAILED",
+            "runtime",
+            &error.to_string(),
+            cli_common::ExitCode::InternalFailure as i32,
+        );
+    }
 
     let (result, _events) =
         match implement_app::run_implement(&request, &config, Some(&cancellation_token)) {
             Ok(value) => value,
             Err(message) => match message.as_str() {
-                "missing API key" => emit_error("MISSING_API_KEY", "configuration", &message),
-                _ if message.contains("unsupported model provider prefix") => {
-                    emit_error("INVALID_ARGUMENTS", "validation", &message)
-                }
-                _ => emit_error("IMPLEMENT_SETUP_FAILED", "runtime", &message),
+                "missing API key" => emit_error(
+                    "MISSING_API_KEY",
+                    "configuration",
+                    &message,
+                    cli_common::ExitCode::InternalFailure as i32,
+                ),
+                _ if message.contains("unsupported model provider prefix") => emit_error(
+                    "INVALID_ARGUMENTS",
+                    "validation",
+                    &message,
+                    cli_common::ExitCode::InvalidRequest as i32,
+                ),
+                _ => emit_error(
+                    "IMPLEMENT_SETUP_FAILED",
+                    "runtime",
+                    &message,
+                    cli_common::ExitCode::InternalFailure as i32,
+                ),
             },
         };
 
@@ -203,7 +248,7 @@ fn main() {
     std::process::exit(exit_code_for_result(&result));
 }
 
-fn emit_error(code: &str, category: &str, message: &str) -> ! {
+fn emit_error(code: &str, category: &str, message: &str, exit_code: i32) -> ! {
     let error = AgentError {
         schema_version: "agent.error/v1".into(),
         code: code.into(),
@@ -212,13 +257,18 @@ fn emit_error(code: &str, category: &str, message: &str) -> ! {
         retryable: false,
     };
     let _ = cli_common::write_json_stdout(&error);
-    std::process::exit(cli_common::ExitCode::InvalidRequest as i32);
+    std::process::exit(exit_code);
 }
 
 fn required_value(value: Option<String>, code: &str, message: &str) -> String {
     match value {
         Some(value) => value,
-        None => emit_error(code, "validation", message),
+        None => emit_error(
+            code,
+            "validation",
+            message,
+            cli_common::ExitCode::InvalidRequest as i32,
+        ),
     }
 }
 
@@ -229,8 +279,26 @@ fn flag_value(args: &[String], index: usize, flag: &str) -> String {
             "MISSING_ARGUMENT_VALUE",
             "validation",
             &format!("{} requires a value", flag),
+            cli_common::ExitCode::InvalidRequest as i32,
         ),
     }
+}
+
+fn parse_flag_value<T: std::str::FromStr>(
+    args: &[String],
+    index: usize,
+    flag: &str,
+    error_code: &str,
+) -> T {
+    let raw = flag_value(args, index, flag);
+    raw.parse().unwrap_or_else(|_| {
+        emit_error(
+            error_code,
+            "validation",
+            &format!("{} requires a valid value", flag),
+            cli_common::ExitCode::InvalidRequest as i32,
+        )
+    })
 }
 
 fn exit_code_for_result(result: &implement_app::ImplementResult) -> i32 {

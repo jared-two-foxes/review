@@ -49,3 +49,92 @@ fn invalid_json_request_is_rejected_as_typed_validation_error() {
         Some(cli_common::ExitCode::InvalidRequest as i32)
     );
 }
+
+#[test]
+fn invalid_numeric_flags_are_rejected_as_typed_validation_errors() {
+    let output = Command::new(env!("CARGO_BIN_EXE_implement-cli"))
+        .args([
+            "run",
+            "--repository",
+            ".",
+            "--target-path",
+            "README.md",
+            "--expected-content",
+            "before",
+            "--desired-content",
+            "after",
+            "--max-turns",
+            "not-a-number",
+        ])
+        .output()
+        .expect("implement CLI should be executable");
+
+    let error: Value = serde_json::from_slice(&output.stdout)
+        .expect("invalid numeric flags should emit a JSON error envelope");
+    assert_eq!(error["schema_version"], "agent.error/v1");
+    assert_eq!(error["category"], "validation");
+    assert_eq!(error["code"], "INVALID_MAX_TURNS");
+    assert_eq!(
+        output.status.code(),
+        Some(cli_common::ExitCode::InvalidRequest as i32)
+    );
+}
+
+#[test]
+fn unknown_arguments_are_rejected_as_typed_validation_errors() {
+    let output = Command::new(env!("CARGO_BIN_EXE_implement-cli"))
+        .args([
+            "run",
+            "--repository",
+            ".",
+            "--target-path",
+            "README.md",
+            "--expected-content",
+            "before",
+            "--desired-content",
+            "after",
+            "--repositry",
+            ".",
+        ])
+        .output()
+        .expect("implement CLI should be executable");
+
+    let error: Value = serde_json::from_slice(&output.stdout)
+        .expect("unknown arguments should emit a JSON error envelope");
+    assert_eq!(error["schema_version"], "agent.error/v1");
+    assert_eq!(error["category"], "validation");
+    assert_eq!(error["code"], "UNRECOGNIZED_ARGUMENT");
+    assert_eq!(
+        output.status.code(),
+        Some(cli_common::ExitCode::InvalidRequest as i32)
+    );
+}
+
+#[test]
+fn missing_api_key_uses_non_validation_failure_exit_code() {
+    let output = Command::new(env!("CARGO_BIN_EXE_implement-cli"))
+        .args([
+            "run",
+            "--repository",
+            ".",
+            "--target-path",
+            "README.md",
+            "--expected-content",
+            "before",
+            "--desired-content",
+            "after",
+        ])
+        .env_remove("OPENAI_API_KEY")
+        .output()
+        .expect("implement CLI should be executable");
+
+    let error: Value =
+        serde_json::from_slice(&output.stdout).expect("missing API key should emit JSON");
+    assert_eq!(error["schema_version"], "agent.error/v1");
+    assert_eq!(error["category"], "configuration");
+    assert_eq!(error["code"], "MISSING_API_KEY");
+    assert_eq!(
+        output.status.code(),
+        Some(cli_common::ExitCode::InternalFailure as i32)
+    );
+}

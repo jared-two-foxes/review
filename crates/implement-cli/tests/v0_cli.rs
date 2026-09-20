@@ -86,3 +86,52 @@ fn demo_args_produce_json_result() {
     assert_eq!(result["status"], "Indeterminate");
     assert_eq!(result["target_path"], "README.md");
 }
+
+#[test]
+fn request_file_takes_precedence_over_inline_flags() {
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let request_path = std::env::temp_dir().join(format!(
+        "implement-cli-request-precedence-{}.json",
+        std::process::id()
+    ));
+    fs::write(
+        &request_path,
+        format!(
+            r#"{{
+  "repository_path": "{}",
+  "target_path": "README.md",
+  "expected_content": "before",
+  "desired_content": "after"
+}}"#,
+            workspace_root.display()
+        ),
+    )
+    .expect("write request fixture");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_implement-cli"))
+        .args([
+            "run",
+            "--request",
+            request_path.to_str().unwrap(),
+            "--repository",
+            "/definitely/ignored",
+            "--target-path",
+            "ignored.txt",
+            "--expected-content",
+            "ignored-before",
+            "--desired-content",
+            "ignored-after",
+        ])
+        .env("OPENAI_API_KEY", "fake-openai-key")
+        .output()
+        .expect("implement CLI should be executable");
+    fs::remove_file(&request_path).ok();
+
+    let result: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert_eq!(result["status"], "Indeterminate");
+    assert_eq!(result["target_path"], "README.md");
+}
