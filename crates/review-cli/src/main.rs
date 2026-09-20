@@ -1,3 +1,4 @@
+use code_agent_runtime::provider::resolve_provider_route;
 use review_app::ReviewConfig;
 use review_protocol::{ReviewRequest, ReviewStatus};
 use std::path::Path;
@@ -13,7 +14,7 @@ fn main() {
 
     let mut request_path: Option<String> = None;
     let mut model: String = "gpt-4o".into();
-    let mut base_url: String = "https://api.openai.com/v1/chat/completions".into();
+    let mut base_url: Option<String> = None;
     let mut max_turns: u32 = 10;
     let mut wall_clock_budget_secs: u64 = 60;
     let mut max_input_tokens: Option<u64> = None;
@@ -50,7 +51,7 @@ fn main() {
                 i += 1;
             }
             "--base-url" => {
-                base_url = flag_value(&args, i, "--base-url");
+                base_url = Some(flag_value(&args, i, "--base-url"));
                 i += 1;
             }
             "--max-turns" => {
@@ -169,11 +170,14 @@ fn main() {
     })
     .expect("set Ctrl-C handler");
 
-    let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
+    let route = match resolve_provider_route(&model, base_url.as_deref(), None) {
+        Ok(route) => route,
+        Err(message) => emit_error("INVALID_ARGUMENTS", &message),
+    };
     let config = ReviewConfig {
-        model,
-        base_url,
-        api_key,
+        model: route.model,
+        base_url: route.base_url,
+        api_key: route.api_key,
         max_turns,
         max_tool_calls: 40,
         max_completion_attempts: 3,

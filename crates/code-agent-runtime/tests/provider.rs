@@ -8,7 +8,65 @@ use agent_kernel::application::{ContextBlock, InstructionBlock};
 use agent_kernel::model::{
     CanonicalModelRequest, ModelAction, ModelError, ModelProvider, ToolDescription, UsageRecord,
 };
-use code_agent_runtime::provider::OpenAiProvider;
+use code_agent_runtime::provider::{OpenAiProvider, resolve_provider_route};
+
+#[test]
+fn model_prefix_routing_normalizes_model_and_provider_defaults() {
+    let route = resolve_provider_route("ollama/llama3.2", None, Some("test-key"))
+        .expect("ollama prefix should route successfully");
+    assert_eq!(route.model, "llama3.2");
+    assert_eq!(route.base_url, "http://127.0.0.1:11434/v1/chat/completions");
+    assert_eq!(route.api_key, "test-key");
+}
+
+#[test]
+fn model_prefix_routing_accepts_openai_prefix() {
+    let route = resolve_provider_route("openai/gpt-4o", None, Some("test-key"))
+        .expect("openai prefix should route successfully");
+    assert_eq!(route.model, "gpt-4o");
+    assert_eq!(route.base_url, "https://api.openai.com/v1/chat/completions");
+    assert_eq!(route.api_key, "test-key");
+}
+
+#[test]
+fn model_prefix_routing_accepts_opencode_prefix() {
+    let route = resolve_provider_route("opencode/zen", None, Some("test-key"))
+        .expect("opencode prefix should route successfully");
+    assert_eq!(route.model, "zen");
+    assert_eq!(route.base_url, "https://api.opencode.ai/v1/chat/completions");
+    assert_eq!(route.api_key, "test-key");
+}
+
+#[test]
+fn model_prefix_routing_honors_explicit_overrides() {
+    let route = resolve_provider_route(
+        "github-copilot/gpt-4.1",
+        Some("http://127.0.0.1:9000/custom"),
+        Some("custom-key"),
+    )
+    .expect("copilot prefix should route successfully");
+    assert_eq!(route.model, "gpt-4.1");
+    assert_eq!(route.base_url, "http://127.0.0.1:9000/custom");
+    assert_eq!(route.api_key, "custom-key");
+}
+
+#[test]
+fn model_prefix_routing_rejects_unknown_provider_prefixes() {
+    let error = resolve_provider_route("anthropic/claude", None, None)
+        .expect_err("unknown provider prefix must fail validation");
+    assert!(error.contains("unsupported model provider prefix"));
+}
+
+#[test]
+fn model_prefix_routing_rejects_empty_provider_model_suffixes() {
+    let openai_error = resolve_provider_route("openai/", None, None)
+        .expect_err("empty provider-qualified model suffix must fail validation");
+    assert!(openai_error.contains("requires a non-empty model name"));
+
+    let anthropic_error = resolve_provider_route("anthropic/", None, None)
+        .expect_err("empty provider-qualified model suffix must fail validation");
+    assert!(anthropic_error.contains("requires a non-empty model name"));
+}
 
 #[test]
 fn openai_provider_round_trips_canonical_request_and_tool_call() {

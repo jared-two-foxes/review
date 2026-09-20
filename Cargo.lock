@@ -1757,6 +1757,7 @@ name = "review-cli"
 version = "0.1.0"
 dependencies = [
  "cli-common",
+ "code-agent-runtime",
  "ctrlc",
  "jsonschema 0.17.1",
  "review-app",

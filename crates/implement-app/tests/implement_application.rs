@@ -9,7 +9,7 @@ use agent_protocol::SequenceIdGenerator;
 use code_agent_runtime::identity::content_id_for_bytes;
 use implement_app::{
     ImplementApplication, ImplementConfig, ImplementReason, ImplementRequest, ImplementStatus,
-    run_implement_with_provider,
+    run_implement, run_implement_with_provider,
 };
 use serde_json::{Value, json};
 use std::process::Command;
@@ -340,4 +340,22 @@ fn temporary_repository_flow_applies_bounded_mutation() {
     assert!(events.iter().any(|event| {
         event.event_type == "kernel.completion_accepted" && !event.execution_id.is_empty()
     }));
+}
+
+#[test]
+fn run_implement_rejects_unknown_provider_prefix() {
+    let request = ImplementRequest {
+        repository_path: ".".into(),
+        target_path: "src/app.txt".into(),
+        expected_content: "before".into(),
+        desired_content: "after".into(),
+    };
+    let config = ImplementConfig {
+        model: "anthropic/claude".into(),
+        ..ImplementConfig::default()
+    };
+
+    let error = run_implement(&request, &config, None)
+        .expect_err("unknown provider prefixes must be rejected");
+    assert!(error.contains("unsupported model provider prefix"));
 }
