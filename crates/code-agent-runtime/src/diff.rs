@@ -61,6 +61,19 @@ pub fn compute_diff<'a>(
             opts.reverse(true);
             git_repo.diff_tree_to_index(Some(&head_tree), Some(&index), Some(&mut opts))?
         }
+        (ReviewTarget::Empty, ReviewTarget::WorkingDirectory) => {
+            opts.include_untracked(true);
+            opts.recurse_untracked_dirs(true);
+            git_repo.diff_tree_to_workdir(None, Some(&mut opts))?
+        }
+        (ReviewTarget::Empty, ReviewTarget::Commit(head_oid)) => {
+            let head_tree = git_repo.find_commit(*head_oid)?.tree()?;
+            git_repo.diff_tree_to_tree(None, Some(&head_tree), Some(&mut opts))?
+        }
+        (ReviewTarget::Empty, ReviewTarget::Index) => {
+            let index = git_repo.index()?;
+            git_repo.diff_tree_to_index(None, Some(&index), Some(&mut opts))?
+        }
         _ => {
             return Err(RepoError::Other(
                 "unsupported diff combination: at least one side must be a commit".into(),
@@ -102,6 +115,12 @@ pub fn changed_files(
                 git2::Delta::Added => FileStatus::Added,
                 git2::Delta::Deleted => FileStatus::Deleted,
                 git2::Delta::Renamed => FileStatus::Renamed,
+                git2::Delta::Untracked
+                    if matches!(base, ReviewTarget::WorkingDirectory | ReviewTarget::Index) =>
+                {
+                    FileStatus::Deleted
+                }
+                git2::Delta::Untracked => FileStatus::Added,
                 _ => FileStatus::Modified,
             };
             changes.push(FileChange { path, status });
