@@ -71,6 +71,7 @@ pub fn run_implement(
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ImplementRequest {
     pub repository_path: String,
     pub target_path: String,
