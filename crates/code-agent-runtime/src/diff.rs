@@ -115,6 +115,15 @@ pub fn changed_files(
                 git2::Delta::Added => FileStatus::Added,
                 git2::Delta::Deleted => FileStatus::Deleted,
                 git2::Delta::Renamed => FileStatus::Renamed,
+                git2::Delta::Untracked
+                    if matches!(
+                        (base, head),
+                        (ReviewTarget::WorkingDirectory, ReviewTarget::Commit(_))
+                            | (ReviewTarget::Index, ReviewTarget::Commit(_))
+                    ) =>
+                {
+                    FileStatus::Deleted
+                }
                 git2::Delta::Untracked => FileStatus::Added,
                 _ => FileStatus::Modified,
             };

@@ -21,6 +21,7 @@ impl ReviewTarget {
     ///
     /// - `:working` -> working directory
     /// - `:staged` -> git index
+    /// - `:empty` -> empty tree
     /// - any other string -> resolved as a git ref (e.g. `HEAD`, `HEAD~1`, a branch name).
     pub fn parse(repo: &GitRepo, ref_str: &str) -> Result<Self, RepoError> {
         match ref_str {

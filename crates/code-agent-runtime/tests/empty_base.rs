@@ -1,4 +1,4 @@
-use code_agent_runtime::diff::{FileStatus, changed_files, compute_diff};
+use code_agent_runtime::diff::{changed_files, FileStatus};
 use code_agent_runtime::repo::GitRepo;
 use code_agent_runtime::target::ReviewTarget;
 use std::path::Path;
@@ -49,16 +49,12 @@ fn empty_base_vs_working_dir_shows_all_files_as_added() {
     let base = ReviewTarget::parse(&repo, ":empty").unwrap();
     let head = ReviewTarget::parse(&repo, ":working").unwrap();
     let files = changed_files(&repo, &base, &head).unwrap();
-    assert!(
-        files
-            .iter()
-            .any(|f| f.path == "src/main.rs" && f.status == FileStatus::Added)
-    );
-    assert!(
-        files
-            .iter()
-            .any(|f| f.path == "README.md" && f.status == FileStatus::Added)
-    );
+    assert!(files
+        .iter()
+        .any(|f| f.path == "src/main.rs" && f.status == FileStatus::Added));
+    assert!(files
+        .iter()
+        .any(|f| f.path == "README.md" && f.status == FileStatus::Added));
     std::fs::remove_dir_all(&root).unwrap();
 }
 
@@ -71,11 +67,31 @@ fn empty_base_vs_commit_shows_all_files_as_added() {
     let base = ReviewTarget::parse(&repo, ":empty").unwrap();
     let head = ReviewTarget::parse(&repo, "HEAD").unwrap();
     let files = changed_files(&repo, &base, &head).unwrap();
-    assert!(
-        files
-            .iter()
-            .any(|f| f.path == "src/main.rs" && f.status == FileStatus::Added)
-    );
+    assert!(files
+        .iter()
+        .any(|f| f.path == "src/main.rs" && f.status == FileStatus::Added));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn empty_base_vs_index_shows_staged_files_as_added() {
+    let root = std::env::temp_dir().join("empty-target-index-test");
+    let _ = std::fs::remove_dir_all(&root);
+    create_test_repo(&root);
+    std::fs::write(root.join("staged.txt"), "staged\n").unwrap();
+    let _ = std::process::Command::new("git")
+        .args(["add", "staged.txt"])
+        .current_dir(&root)
+        .status();
+
+    let repo = GitRepo::open(&root).unwrap();
+    let base = ReviewTarget::parse(&repo, ":empty").unwrap();
+    let head = ReviewTarget::parse(&repo, ":staged").unwrap();
+    let files = changed_files(&repo, &base, &head).unwrap();
+
+    assert!(files
+        .iter()
+        .any(|f| f.path == "staged.txt" && f.status == FileStatus::Added));
     std::fs::remove_dir_all(&root).unwrap();
 }
 
