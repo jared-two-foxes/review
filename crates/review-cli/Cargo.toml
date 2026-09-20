@@ -4,15 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-cli-common = { path = "../cli-common" }
-review-protocol = { path = "../review-protocol" }
-review-app = { path = "../review-app" }
-code-agent-runtime = { path = "../code-agent-runtime" }
+cli-common = { version = "0.1.0", path = "../cli-common" }
+review-protocol = { version = "0.1.0", path = "../review-protocol" }
+review-app = { version = "0.1.0", path = "../review-app" }
+code-agent-runtime = { version = "0.1.0", path = "../code-agent-runtime" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 ctrlc = "3"
 
 [dev-dependencies]
-cli-common = { path = "../cli-common" }
+cli-common = { version = "0.1.0", path = "../cli-common" }
 jsonschema = "0.17"
 serde_json = "1"
