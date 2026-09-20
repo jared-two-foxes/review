@@ -16,10 +16,10 @@ fn spawn_provider_probe() -> (String, thread::JoinHandle<String>) {
             let count = stream.read(&mut chunk).expect("read provider request");
             assert!(count > 0, "provider request must contain a body");
             bytes.extend_from_slice(&chunk[..count]);
-            let headers_end = bytes
-                .windows(4)
-                .position(|window| window == b"\r\n\r\n")
-                .expect("provider request must contain HTTP headers");
+            let Some(headers_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n")
+            else {
+                continue;
+            };
             let headers = String::from_utf8_lossy(&bytes[..headers_end]);
             let content_length = headers
                 .lines()
