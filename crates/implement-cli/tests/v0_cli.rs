@@ -11,18 +11,19 @@ fn valid_request_file_produces_json_result() {
         .unwrap()
         .parent()
         .unwrap();
+    let repository_path = serde_json::to_string(workspace_root).unwrap();
     let request_path =
         std::env::temp_dir().join(format!("implement-cli-request-{}.json", std::process::id()));
     fs::write(
         &request_path,
         format!(
             r#"{{
-  "repository_path": "{}",
+  "repository_path": {},
   "target_path": "README.md",
   "expected_content": "before",
   "desired_content": "after"
 }}"#,
-            workspace_root.display()
+            repository_path
         ),
     )
     .expect("write request fixture");
@@ -94,6 +95,7 @@ fn request_file_takes_precedence_over_inline_flags() {
         .unwrap()
         .parent()
         .unwrap();
+    let repository_path = serde_json::to_string(workspace_root).unwrap();
     let request_path = std::env::temp_dir().join(format!(
         "implement-cli-request-precedence-{}.json",
         std::process::id()
@@ -102,12 +104,12 @@ fn request_file_takes_precedence_over_inline_flags() {
         &request_path,
         format!(
             r#"{{
-  "repository_path": "{}",
+  "repository_path": {},
   "target_path": "README.md",
   "expected_content": "before",
   "desired_content": "after"
 }}"#,
-            workspace_root.display()
+            repository_path
         ),
     )
     .expect("write request fixture");
