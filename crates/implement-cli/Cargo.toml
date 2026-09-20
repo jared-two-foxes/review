@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-cli-common = { path = "../cli-common" }
-implement-app = { path = "../implement-app" }
+cli-common = { version = "0.1.0", path = "../cli-common" }
+implement-app = { version = "0.1.0", path = "../implement-app" }
 serde = { version = "1", features = ["derive"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 ctrlc = "3"

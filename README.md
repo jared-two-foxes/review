@@ -91,6 +91,13 @@ The `implement-cli` binary follows the same provider-routing model and runtime f
 
 ## Example usage
 
+Install the two CLIs directly with `cargo install`:
+
+```bash
+cargo install --git https://github.com/jared-two-foxes/review --locked --package review-cli
+cargo install --git https://github.com/jared-two-foxes/review --locked --package implement-cli
+```
+
 Run the CLI against a request fixture:
 
 ```bash
