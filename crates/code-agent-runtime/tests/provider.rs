@@ -20,6 +20,24 @@ fn model_prefix_routing_normalizes_model_and_provider_defaults() {
 }
 
 #[test]
+fn model_prefix_routing_accepts_openai_prefix() {
+    let route = resolve_provider_route("openai/gpt-4o", None, Some("test-key"))
+        .expect("openai prefix should route successfully");
+    assert_eq!(route.model, "gpt-4o");
+    assert_eq!(route.base_url, "https://api.openai.com/v1/chat/completions");
+    assert_eq!(route.api_key, "test-key");
+}
+
+#[test]
+fn model_prefix_routing_accepts_opencode_prefix() {
+    let route = resolve_provider_route("opencode/zen", None, Some("test-key"))
+        .expect("opencode prefix should route successfully");
+    assert_eq!(route.model, "zen");
+    assert_eq!(route.base_url, "https://api.opencode.ai/v1/chat/completions");
+    assert_eq!(route.api_key, "test-key");
+}
+
+#[test]
 fn model_prefix_routing_honors_explicit_overrides() {
     let route = resolve_provider_route(
         "github-copilot/gpt-4.1",

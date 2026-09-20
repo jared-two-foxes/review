@@ -25,9 +25,17 @@ pub fn resolve_provider_route(
 
     if let Some((provider, provider_model)) = parsed {
         let (default_base_url, default_api_key) = match provider.as_str() {
+            "openai" => (
+                "https://api.openai.com/v1/chat/completions",
+                std::env::var("OPENAI_API_KEY").unwrap_or_default(),
+            ),
             "ollama" => (
                 "http://127.0.0.1:11434/v1/chat/completions",
                 std::env::var("OLLAMA_API_KEY").unwrap_or_else(|_| "ollama".into()),
+            ),
+            "opencode" => (
+                "https://api.opencode.ai/v1/chat/completions",
+                std::env::var("OPENCODE_API_KEY").unwrap_or_default(),
             ),
             "copilot" | "github-copilot" => (
                 "https://api.githubcopilot.com/chat/completions",
@@ -37,7 +45,7 @@ pub fn resolve_provider_route(
             ),
             _ => {
                 return Err(format!(
-                    "unsupported model provider prefix '{}'; supported prefixes are ollama/, copilot/, github-copilot/",
+                    "unsupported model provider prefix '{}'; supported prefixes are openai/, ollama/, opencode/, copilot/, github-copilot/",
                     provider
                 ));
             }

@@ -198,3 +198,81 @@ fn unknown_model_provider_prefix_is_rejected() {
         Some(cli_common::ExitCode::InvalidRequest as i32)
     );
 }
+
+#[test]
+fn openai_model_prefix_routes_and_strips_provider_name() {
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let (base_url, server) = spawn_provider_probe();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_review-cli"))
+        .args([
+            "run",
+            "--repository",
+            workspace_root.to_str().unwrap(),
+            "--base-ref",
+            "HEAD~1",
+            "--head-ref",
+            "HEAD",
+            "--model",
+            "openai/gpt-4o",
+            "--base-url",
+            &base_url,
+            "--wall-clock-budget-secs",
+            "5",
+        ])
+        .env("OPENAI_API_KEY", "fake-openai-key")
+        .output()
+        .expect("review CLI should be executable");
+
+    let body = server.join().expect("provider thread should finish");
+    let provider_request: Value =
+        serde_json::from_str(&body).expect("provider request must be JSON");
+    assert_eq!(provider_request["model"], "gpt-4o");
+
+    let result: Value = serde_json::from_slice(&output.stdout)
+        .expect("CLI output should be a JSON review result");
+    assert_eq!(result["status"], "INDETERMINATE");
+}
+
+#[test]
+fn opencode_model_prefix_routes_and_strips_provider_name() {
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let (base_url, server) = spawn_provider_probe();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_review-cli"))
+        .args([
+            "run",
+            "--repository",
+            workspace_root.to_str().unwrap(),
+            "--base-ref",
+            "HEAD~1",
+            "--head-ref",
+            "HEAD",
+            "--model",
+            "opencode/zen",
+            "--base-url",
+            &base_url,
+            "--wall-clock-budget-secs",
+            "5",
+        ])
+        .env("OPENCODE_API_KEY", "fake-opencode-key")
+        .output()
+        .expect("review CLI should be executable");
+
+    let body = server.join().expect("provider thread should finish");
+    let provider_request: Value =
+        serde_json::from_str(&body).expect("provider request must be JSON");
+    assert_eq!(provider_request["model"], "zen");
+
+    let result: Value = serde_json::from_slice(&output.stdout)
+        .expect("CLI output should be a JSON review result");
+    assert_eq!(result["status"], "INDETERMINATE");
+}
