@@ -761,6 +761,12 @@ impl Tool for ListDirectoryTool {
                     };
                 }
             },
+            ReviewTarget::Empty => {
+                return ToolResult {
+                    status: ToolStatus::Failed,
+                    value: json!({"error": "cannot list directory in empty review target"}),
+                };
+            }
         };
 
         entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -871,6 +877,12 @@ impl Tool for SearchTextTool {
                     };
                 }
             },
+            ReviewTarget::Empty => {
+                return ToolResult {
+                    status: ToolStatus::Failed,
+                    value: json!({"error": "cannot search in empty review target"}),
+                };
+            }
         };
         matches.sort();
         let limit = self.policy.matches_limit();
