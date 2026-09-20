@@ -13,7 +13,10 @@ fn missing_required_demo_args_are_rejected_as_typed_validation_errors() {
     assert_eq!(error["schema_version"], "agent.error/v1");
     assert_eq!(error["category"], "validation");
     assert_eq!(error["code"], "MISSING_EXPECTED_CONTENT");
-    assert_eq!(output.status.code(), Some(cli_common::ExitCode::InvalidRequest as i32));
+    assert_eq!(
+        output.status.code(),
+        Some(cli_common::ExitCode::InvalidRequest as i32)
+    );
 }
 
 #[test]
@@ -25,7 +28,13 @@ fn invalid_json_request_is_rejected_as_typed_validation_error() {
     std::fs::write(&request_path, "not json").expect("write invalid request fixture");
 
     let output = Command::new(env!("CARGO_BIN_EXE_implement-cli"))
-        .args(["run", "--request", request_path.to_str().unwrap(), "--format", "json"])
+        .args([
+            "run",
+            "--request",
+            request_path.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
         .output()
         .expect("implement CLI should be executable");
     std::fs::remove_file(&request_path).ok();
@@ -35,5 +44,8 @@ fn invalid_json_request_is_rejected_as_typed_validation_error() {
     assert_eq!(error["schema_version"], "agent.error/v1");
     assert_eq!(error["category"], "validation");
     assert_eq!(error["code"], "REQUEST_PARSE_FAILED");
-    assert_eq!(output.status.code(), Some(cli_common::ExitCode::InvalidRequest as i32));
+    assert_eq!(
+        output.status.code(),
+        Some(cli_common::ExitCode::InvalidRequest as i32)
+    );
 }

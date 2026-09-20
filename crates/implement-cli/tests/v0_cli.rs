@@ -11,10 +11,8 @@ fn valid_request_file_produces_json_result() {
         .unwrap()
         .parent()
         .unwrap();
-    let request_path = std::env::temp_dir().join(format!(
-        "implement-cli-request-{}.json",
-        std::process::id()
-    ));
+    let request_path =
+        std::env::temp_dir().join(format!("implement-cli-request-{}.json", std::process::id()));
     fs::write(
         &request_path,
         format!(
@@ -30,7 +28,13 @@ fn valid_request_file_produces_json_result() {
     .expect("write request fixture");
 
     let output = Command::new(env!("CARGO_BIN_EXE_implement-cli"))
-        .args(["run", "--request", request_path.to_str().unwrap(), "--format", "json"])
+        .args([
+            "run",
+            "--request",
+            request_path.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
         .env("OPENAI_API_KEY", "fake-openai-key")
         .env("RUST_LOG", "error")
         .output()

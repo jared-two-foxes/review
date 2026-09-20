@@ -127,7 +127,11 @@ fn main() {
         match cli_common::parse_strict_json(&bytes) {
             Ok(request) => request,
             Err(cli_common::ParseError::Syntax(_)) => {
-                emit_error("REQUEST_PARSE_FAILED", "validation", "request is not valid JSON");
+                emit_error(
+                    "REQUEST_PARSE_FAILED",
+                    "validation",
+                    "request is not valid JSON",
+                );
             }
             Err(cli_common::ParseError::DuplicateKey(key)) => {
                 emit_error(
@@ -139,8 +143,16 @@ fn main() {
         }
     } else {
         ImplementRequest {
-            repository_path: required_value(repository, "MISSING_REPOSITORY", "--repository or --request is required"),
-            target_path: required_value(target_path, "MISSING_TARGET_PATH", "--target-path or --request is required"),
+            repository_path: required_value(
+                repository,
+                "MISSING_REPOSITORY",
+                "--repository or --request is required",
+            ),
+            target_path: required_value(
+                target_path,
+                "MISSING_TARGET_PATH",
+                "--target-path or --request is required",
+            ),
             expected_content: required_value(
                 expected_content,
                 "MISSING_EXPECTED_CONTENT",
@@ -175,16 +187,17 @@ fn main() {
     })
     .expect("set Ctrl-C handler");
 
-    let (result, _events) = match implement_app::run_implement(&request, &config, Some(&cancellation_token)) {
-        Ok(value) => value,
-        Err(message) => match message.as_str() {
-            "missing API key" => emit_error("MISSING_API_KEY", "configuration", &message),
-            _ if message.contains("unsupported model provider prefix") => {
-                emit_error("INVALID_ARGUMENTS", "validation", &message)
-            }
-            _ => emit_error("IMPLEMENT_SETUP_FAILED", "runtime", &message),
-        },
-    };
+    let (result, _events) =
+        match implement_app::run_implement(&request, &config, Some(&cancellation_token)) {
+            Ok(value) => value,
+            Err(message) => match message.as_str() {
+                "missing API key" => emit_error("MISSING_API_KEY", "configuration", &message),
+                _ if message.contains("unsupported model provider prefix") => {
+                    emit_error("INVALID_ARGUMENTS", "validation", &message)
+                }
+                _ => emit_error("IMPLEMENT_SETUP_FAILED", "runtime", &message),
+            },
+        };
 
     cli_common::write_json_stdout(&result).expect("failed to write result");
     std::process::exit(exit_code_for_result(&result));

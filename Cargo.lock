@@ -1059,6 +1059,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "implement-cli"
+version = "0.1.0"
+dependencies = [
+ "cli-common",
+ "ctrlc",
+ "implement-app",
+ "serde",
+ "serde_json",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

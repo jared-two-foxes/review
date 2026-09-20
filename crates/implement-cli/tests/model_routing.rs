@@ -16,7 +16,8 @@ fn spawn_provider_probe() -> (String, thread::JoinHandle<String>) {
             let count = stream.read(&mut chunk).expect("read provider request");
             assert!(count > 0, "provider request must contain a body");
             bytes.extend_from_slice(&chunk[..count]);
-            let Some(headers_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
+            let Some(headers_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n")
+            else {
                 continue;
             };
             let headers = String::from_utf8_lossy(&bytes[..headers_end]);
@@ -75,7 +76,8 @@ fn openai_model_prefix_routes_and_strips_provider_name() {
         .expect("implement CLI should be executable");
 
     let body = server.join().expect("provider thread should finish");
-    let provider_request: Value = serde_json::from_str(&body).expect("provider request must be JSON");
+    let provider_request: Value =
+        serde_json::from_str(&body).expect("provider request must be JSON");
     assert_eq!(provider_request["model"], "gpt-4o");
 
     let result: Value = serde_json::from_slice(&output.stdout).expect("CLI output should be JSON");
@@ -111,5 +113,8 @@ fn unknown_model_provider_prefix_is_rejected() {
         .expect("unknown provider prefix should emit a JSON error");
     assert_eq!(error["schema_version"], "agent.error/v1");
     assert_eq!(error["code"], "INVALID_ARGUMENTS");
-    assert_eq!(output.status.code(), Some(cli_common::ExitCode::InvalidRequest as i32));
+    assert_eq!(
+        output.status.code(),
+        Some(cli_common::ExitCode::InvalidRequest as i32)
+    );
 }
