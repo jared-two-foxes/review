@@ -261,6 +261,25 @@ fn reverse_workdir_diff_reports_untracked_base_files_as_deleted() {
 }
 
 #[test]
+fn reverse_index_diff_reports_staged_base_files_as_deleted() {
+    let dir = make_test_repo();
+    std::fs::write(dir.path().join("staged_only.txt"), "staged\n").unwrap();
+    Command::new("git")
+        .args(["add", "staged_only.txt"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    let repo = GitRepo::open(dir.path()).unwrap();
+    let (base, head) = resolve_targets(&repo, ":staged", "HEAD").unwrap();
+    let changes = changed_files(&repo, &base, &head).unwrap();
+
+    assert!(changes
+        .iter()
+        .any(|change| change.path == "staged_only.txt" && change.status == FileStatus::Deleted));
+}
+
+#[test]
 fn read_diff_formats_hunks_and_marks_byte_limited_output() {
     let dir = make_test_repo();
     std::fs::write(
