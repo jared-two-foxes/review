@@ -50,24 +50,24 @@ impl Default for ImplementConfig {
             max_input_tokens: None,
             max_cost_usd: None,
         }
-
-        pub fn run_implement(
-            request: &ImplementRequest,
-            config: &ImplementConfig,
-            cancel: Option<&AtomicBool>,
-        ) -> Result<(ImplementResult, Vec<LedgerEvent>), String> {
-            let route = resolve_provider_route(
-                config.model.as_str(),
-                config.base_url.as_deref(),
-                config.api_key.as_deref(),
-            )?;
-            if route.api_key.is_empty() {
-                return Err("missing API key".into());
-            }
-            let provider = OpenAiProvider::new(route.base_url, route.api_key, route.model);
-            run_implement_with_provider(request, config, provider, cancel)
-        }
     }
+}
+
+pub fn run_implement(
+    request: &ImplementRequest,
+    config: &ImplementConfig,
+    cancel: Option<&AtomicBool>,
+) -> Result<(ImplementResult, Vec<LedgerEvent>), String> {
+    let route = resolve_provider_route(
+        config.model.as_str(),
+        config.base_url.as_deref(),
+        config.api_key.as_deref(),
+    )?;
+    if route.api_key.is_empty() {
+        return Err("missing API key".into());
+    }
+    let provider = OpenAiProvider::new(route.base_url, route.api_key, route.model);
+    run_implement_with_provider(request, config, provider, cancel)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
