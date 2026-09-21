@@ -1,3 +1,4 @@
+use clap::{Arg, ArgAction, Command};
 use code_agent_runtime::provider::resolve_provider_route;
 use review_app::ReviewConfig;
 use review_protocol::{ReviewRequest, ReviewStatus};
@@ -11,6 +12,7 @@ use tracing_subscriber::EnvFilter;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    maybe_print_help(&args);
 
     let mut request_path: Option<String> = None;
     let mut model: String = "gpt-4o".into();
@@ -203,6 +205,131 @@ fn main() {
     };
 
     std::process::exit(exit as i32);
+}
+
+fn maybe_print_help(args: &[String]) {
+    let help_args = args.iter().skip(1).map(String::as_str).collect::<Vec<_>>();
+
+    match help_args.as_slice() {
+        ["--help"] | ["-h"] | ["help"] => {
+            print_help(review_cli_command());
+        }
+        ["run", "--help"] | ["run", "-h"] | ["help", "run"] => {
+            let mut command = review_cli_command();
+            if let Some(run) = command.find_subcommand_mut("run") {
+                print_help(run.clone());
+            }
+            print_help(command);
+        }
+        _ => {}
+    }
+}
+
+fn print_help(mut command: Command) -> ! {
+    command
+        .print_long_help()
+        .expect("failed to write help output");
+    println!();
+    std::process::exit(0);
+}
+
+fn review_cli_command() -> Command {
+    Command::new("review-cli")
+        .about("Run review requests against a repository diff")
+        .subcommand(
+            Command::new("run")
+                .about("Execute a review request")
+                .arg(
+                    Arg::new("request")
+                        .long("request")
+                        .value_name("PATH")
+                        .help("Read a review request JSON file"),
+                )
+                .arg(
+                    Arg::new("format")
+                        .long("format")
+                        .value_name("FORMAT")
+                        .help("Output format (only json is supported)"),
+                )
+                .arg(
+                    Arg::new("model")
+                        .long("model")
+                        .value_name("MODEL")
+                        .help("Model name or provider-prefixed model route"),
+                )
+                .arg(
+                    Arg::new("base-url")
+                        .long("base-url")
+                        .value_name("URL")
+                        .help("Override the provider base URL"),
+                )
+                .arg(
+                    Arg::new("max-turns")
+                        .long("max-turns")
+                        .value_name("COUNT")
+                        .help("Maximum model turns before stopping"),
+                )
+                .arg(
+                    Arg::new("wall-clock-budget-secs")
+                        .long("wall-clock-budget-secs")
+                        .value_name("SECONDS")
+                        .help("Wall-clock budget in seconds"),
+                )
+                .arg(
+                    Arg::new("max-input-tokens")
+                        .long("max-input-tokens")
+                        .value_name("TOKENS")
+                        .help("Abort after exceeding this many input tokens"),
+                )
+                .arg(
+                    Arg::new("max-cost-usd")
+                        .long("max-cost-usd")
+                        .value_name("USD")
+                        .help("Abort after exceeding this estimated USD cost"),
+                )
+                .arg(
+                    Arg::new("emit-events")
+                        .long("emit-events")
+                        .action(ArgAction::SetTrue)
+                        .help("Enable info-level event logging on stderr"),
+                )
+                .arg(
+                    Arg::new("repository")
+                        .long("repository")
+                        .value_name("PATH")
+                        .help("Repository path used when constructing a request from flags"),
+                )
+                .arg(
+                    Arg::new("base-ref")
+                        .long("base-ref")
+                        .value_name("REF")
+                        .help("Base ref for the review request"),
+                )
+                .arg(
+                    Arg::new("head-ref")
+                        .long("head-ref")
+                        .value_name("REF")
+                        .help("Head ref for the review request"),
+                )
+                .arg(
+                    Arg::new("requirements")
+                        .long("requirements")
+                        .value_name("PATH")
+                        .help("Path to a requirements file for demo-style requests"),
+                )
+                .arg(
+                    Arg::new("uncommitted")
+                        .long("uncommitted")
+                        .action(ArgAction::SetTrue)
+                        .help("Use the working tree as the head ref"),
+                )
+                .arg(
+                    Arg::new("ledger")
+                        .long("ledger")
+                        .value_name("PATH")
+                        .help("Write a run ledger to this path"),
+                ),
+        )
 }
 
 fn emit_error(code: &str, message: &str) -> ! {

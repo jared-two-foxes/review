@@ -1,3 +1,4 @@
+use clap::{Arg, ArgAction, Command};
 use implement_app::{ImplementConfig, ImplementReason, ImplementRequest, ImplementStatus};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -19,6 +20,7 @@ struct AgentError {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    maybe_print_help(&args);
 
     let mut request_path: Option<String> = None;
     let mut model: String = "gpt-4o".into();
@@ -255,6 +257,125 @@ fn main() {
 
     cli_common::write_json_stdout(&result).expect("failed to write result");
     std::process::exit(exit_code_for_result(&result));
+}
+
+fn maybe_print_help(args: &[String]) {
+    let help_args = args.iter().skip(1).map(String::as_str).collect::<Vec<_>>();
+
+    match help_args.as_slice() {
+        ["--help"] | ["-h"] | ["help"] => {
+            print_help(implement_cli_command());
+        }
+        ["run", "--help"] | ["run", "-h"] | ["help", "run"] => {
+            let mut command = implement_cli_command();
+            if let Some(run) = command.find_subcommand_mut("run") {
+                print_help(run.clone());
+            }
+            print_help(command);
+        }
+        _ => {}
+    }
+}
+
+fn print_help(mut command: Command) -> ! {
+    command
+        .print_long_help()
+        .expect("failed to write help output");
+    println!();
+    std::process::exit(0);
+}
+
+fn implement_cli_command() -> Command {
+    Command::new("implement-cli")
+        .about("Run implementation requests against a repository")
+        .subcommand(
+            Command::new("run")
+                .about("Execute an implementation request")
+                .arg(
+                    Arg::new("request")
+                        .long("request")
+                        .value_name("PATH")
+                        .help("Read an implementation request JSON file"),
+                )
+                .arg(
+                    Arg::new("format")
+                        .long("format")
+                        .value_name("FORMAT")
+                        .help("Output format (only json is supported)"),
+                )
+                .arg(
+                    Arg::new("model")
+                        .long("model")
+                        .value_name("MODEL")
+                        .help("Model name or provider-prefixed model route"),
+                )
+                .arg(
+                    Arg::new("base-url")
+                        .long("base-url")
+                        .value_name("URL")
+                        .help("Override the provider base URL"),
+                )
+                .arg(
+                    Arg::new("max-turns")
+                        .long("max-turns")
+                        .value_name("COUNT")
+                        .help("Maximum model turns before stopping"),
+                )
+                .arg(
+                    Arg::new("wall-clock-budget-secs")
+                        .long("wall-clock-budget-secs")
+                        .value_name("SECONDS")
+                        .help("Wall-clock budget in seconds"),
+                )
+                .arg(
+                    Arg::new("max-input-tokens")
+                        .long("max-input-tokens")
+                        .value_name("TOKENS")
+                        .help("Abort after exceeding this many input tokens"),
+                )
+                .arg(
+                    Arg::new("max-cost-usd")
+                        .long("max-cost-usd")
+                        .value_name("USD")
+                        .help("Abort after exceeding this estimated USD cost"),
+                )
+                .arg(
+                    Arg::new("emit-events")
+                        .long("emit-events")
+                        .action(ArgAction::SetTrue)
+                        .help("Enable info-level event logging on stderr"),
+                )
+                .arg(
+                    Arg::new("repository")
+                        .long("repository")
+                        .value_name("PATH")
+                        .help("Repository path used when constructing a request from flags"),
+                )
+                .arg(
+                    Arg::new("target-path")
+                        .long("target-path")
+                        .value_name("PATH")
+                        .help("Target file path to update"),
+                )
+                .arg(
+                    Arg::new("expected-content")
+                        .long("expected-content")
+                        .value_name("TEXT")
+                        .help("Expected current file contents"),
+                )
+                .arg(
+                    Arg::new("desired-content")
+                        .long("desired-content")
+                        .value_name("TEXT")
+                        .help("Desired replacement file contents"),
+                )
+                .arg(
+                    Arg::new("ledger")
+                        .long("ledger")
+                        .value_name("PATH")
+                        .help("Write a run ledger to this path"),
+                ),
+        )
 }
 
 fn emit_error(code: &str, category: &str, message: &str, exit_code: i32) -> ! {

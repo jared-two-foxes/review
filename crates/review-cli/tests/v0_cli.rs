@@ -77,6 +77,39 @@ fn demo_args_produce_schema_valid_indeterminate_result() {
     assert_review_result(&result, &schema_path);
 }
 
+#[test]
+fn root_help_lists_run_subcommand() {
+    let output = Command::new(env!("CARGO_BIN_EXE_review-cli"))
+        .arg("--help")
+        .output()
+        .expect("review CLI should be executable");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty(), "help should not write to stderr");
+
+    let stdout = String::from_utf8(output.stdout).expect("help output should be UTF-8");
+    assert!(stdout.contains("review-cli"));
+    assert!(stdout.contains("run"));
+    assert!(stdout.contains("Run review requests against a repository diff"));
+}
+
+#[test]
+fn run_help_lists_review_flags() {
+    let output = Command::new(env!("CARGO_BIN_EXE_review-cli"))
+        .args(["run", "--help"])
+        .output()
+        .expect("review CLI should be executable");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty(), "help should not write to stderr");
+
+    let stdout = String::from_utf8(output.stdout).expect("help output should be UTF-8");
+    assert!(stdout.contains("--request"));
+    assert!(stdout.contains("--repository"));
+    assert!(stdout.contains("--head-ref"));
+    assert!(stdout.contains("--emit-events"));
+}
+
 fn assert_review_result(result: &Value, schema_path: &Path) {
     let schema: Value = serde_json::from_slice(
         &fs::read(schema_path).expect("checked-in review result schema should exist"),
