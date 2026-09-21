@@ -1,3 +1,4 @@
+use clap::{Arg, ArgAction, Command};
 use implement_app::{ImplementConfig, ImplementReason, ImplementRequest, ImplementStatus};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -34,10 +35,17 @@ fn main() {
     let mut desired_content: Option<String> = None;
     let mut ledger_path: Option<String> = None;
 
+    let mut parsed_run_subcommand = false;
     let mut i = 1;
     while i < args.len() {
+        if let Some(target) = requested_help(&args, i, parsed_run_subcommand) {
+            print_requested_help(target);
+        }
+
         match args[i].as_str() {
-            "run" => {}
+            "run" => {
+                parsed_run_subcommand = true;
+            }
             "--request" => {
                 request_path = Some(flag_value(&args, i, "--request"));
                 i += 1;
@@ -255,6 +263,148 @@ fn main() {
 
     cli_common::write_json_stdout(&result).expect("failed to write result");
     std::process::exit(exit_code_for_result(&result));
+}
+
+enum HelpTarget {
+    Root,
+    Run,
+}
+
+fn requested_help(
+    args: &[String],
+    index: usize,
+    parsed_run_subcommand: bool,
+) -> Option<HelpTarget> {
+    match args.get(index).map(String::as_str) {
+        Some("--help") | Some("-h") => Some(if parsed_run_subcommand {
+            HelpTarget::Run
+        } else {
+            HelpTarget::Root
+        }),
+        Some("help") => Some(
+            if parsed_run_subcommand || args.get(index + 1).is_some_and(|arg| arg == "run") {
+                HelpTarget::Run
+            } else {
+                HelpTarget::Root
+            },
+        ),
+        _ => None,
+    }
+}
+
+fn print_help(mut command: Command) -> ! {
+    command
+        .print_long_help()
+        .expect("failed to write help output");
+    println!();
+    std::process::exit(0);
+}
+
+fn print_requested_help(target: HelpTarget) -> ! {
+    match target {
+        HelpTarget::Root => print_help(implement_cli_command()),
+        HelpTarget::Run => {
+            let mut command = implement_cli_command();
+            let run = command
+                .find_subcommand_mut("run")
+                .expect("implement-cli help must define the run subcommand")
+                .clone();
+            print_help(run);
+        }
+    }
+}
+
+fn implement_cli_command() -> Command {
+    Command::new("implement-cli")
+        .about("Run implementation requests against a repository")
+        .subcommand(
+            Command::new("run")
+                .about("Execute an implementation request")
+                .arg(
+                    Arg::new("request")
+                        .long("request")
+                        .value_name("PATH")
+                        .help("Read an implementation request JSON file"),
+                )
+                .arg(
+                    Arg::new("format")
+                        .long("format")
+                        .value_name("FORMAT")
+                        .help("Output format (only json is supported)"),
+                )
+                .arg(
+                    Arg::new("model")
+                        .long("model")
+                        .value_name("MODEL")
+                        .help("Model name or provider-prefixed model route"),
+                )
+                .arg(
+                    Arg::new("base-url")
+                        .long("base-url")
+                        .value_name("URL")
+                        .help("Override the provider base URL"),
+                )
+                .arg(
+                    Arg::new("max-turns")
+                        .long("max-turns")
+                        .value_name("COUNT")
+                        .help("Maximum model turns before stopping"),
+                )
+                .arg(
+                    Arg::new("wall-clock-budget-secs")
+                        .long("wall-clock-budget-secs")
+                        .value_name("SECONDS")
+                        .help("Wall-clock budget in seconds"),
+                )
+                .arg(
+                    Arg::new("max-input-tokens")
+                        .long("max-input-tokens")
+                        .value_name("TOKENS")
+                        .help("Abort after exceeding this many input tokens"),
+                )
+                .arg(
+                    Arg::new("max-cost-usd")
+                        .long("max-cost-usd")
+                        .value_name("USD")
+                        .help("Abort after exceeding this estimated USD cost"),
+                )
+                .arg(
+                    Arg::new("emit-events")
+                        .long("emit-events")
+                        .action(ArgAction::SetTrue)
+                        .help("Enable info-level event logging on stderr"),
+                )
+                .arg(
+                    Arg::new("repository")
+                        .long("repository")
+                        .value_name("PATH")
+                        .help("Repository path used when constructing a request from flags"),
+                )
+                .arg(
+                    Arg::new("target-path")
+                        .long("target-path")
+                        .value_name("PATH")
+                        .help("Target file path to update"),
+                )
+                .arg(
+                    Arg::new("expected-content")
+                        .long("expected-content")
+                        .value_name("TEXT")
+                        .help("Expected current file contents"),
+                )
+                .arg(
+                    Arg::new("desired-content")
+                        .long("desired-content")
+                        .value_name("TEXT")
+                        .help("Desired replacement file contents"),
+                )
+                .arg(
+                    Arg::new("ledger")
+                        .long("ledger")
+                        .value_name("PATH")
+                        .help("Write a run ledger to this path"),
+                ),
+        )
 }
 
 fn emit_error(code: &str, category: &str, message: &str, exit_code: i32) -> ! {

@@ -137,3 +137,94 @@ fn request_file_takes_precedence_over_inline_flags() {
     assert_eq!(result["status"], "Indeterminate");
     assert_eq!(result["target_path"], "README.md");
 }
+
+#[test]
+fn root_help_lists_run_subcommand() {
+    let output = Command::new(env!("CARGO_BIN_EXE_implement-cli"))
+        .arg("--help")
+        .output()
+        .expect("implement CLI should be executable");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty(), "help should not write to stderr");
+
+    let stdout = String::from_utf8(output.stdout).expect("help output should be UTF-8");
+    assert!(stdout.contains("implement-cli"));
+    assert!(stdout.contains("run"));
+    assert!(stdout.contains("Run implementation requests against a repository"));
+}
+
+#[test]
+fn run_help_lists_implement_flags() {
+    let output = Command::new(env!("CARGO_BIN_EXE_implement-cli"))
+        .args(["run", "--help"])
+        .output()
+        .expect("implement CLI should be executable");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty(), "help should not write to stderr");
+
+    let stdout = String::from_utf8(output.stdout).expect("help output should be UTF-8");
+    assert!(stdout.contains("--request"));
+    assert!(stdout.contains("--target-path"));
+    assert!(stdout.contains("--desired-content"));
+    assert!(stdout.contains("--emit-events"));
+}
+
+#[test]
+fn run_help_is_recognized_after_other_run_flags() {
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_implement-cli"))
+        .args([
+            "run",
+            "--repository",
+            workspace_root.to_str().unwrap(),
+            "--help",
+        ])
+        .output()
+        .expect("implement CLI should be executable");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty(), "help should not write to stderr");
+
+    let stdout = String::from_utf8(output.stdout).expect("help output should be UTF-8");
+    assert!(stdout.contains("Execute an implementation request"));
+    assert!(stdout.contains("--repository"));
+}
+
+#[test]
+fn help_aliases_render_root_and_run_help() {
+    let root_output = Command::new(env!("CARGO_BIN_EXE_implement-cli"))
+        .arg("help")
+        .output()
+        .expect("implement CLI should be executable");
+
+    assert_eq!(root_output.status.code(), Some(0));
+    assert!(
+        root_output.stderr.is_empty(),
+        "help should not write to stderr"
+    );
+
+    let root_stdout = String::from_utf8(root_output.stdout).expect("help output should be UTF-8");
+    assert!(root_stdout.contains("Run implementation requests against a repository"));
+
+    let run_output = Command::new(env!("CARGO_BIN_EXE_implement-cli"))
+        .args(["help", "run"])
+        .output()
+        .expect("implement CLI should be executable");
+
+    assert_eq!(run_output.status.code(), Some(0));
+    assert!(
+        run_output.stderr.is_empty(),
+        "help should not write to stderr"
+    );
+
+    let run_stdout = String::from_utf8(run_output.stdout).expect("help output should be UTF-8");
+    assert!(run_stdout.contains("Execute an implementation request"));
+    assert!(run_stdout.contains("--request"));
+}
