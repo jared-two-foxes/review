@@ -8,7 +8,6 @@ use agent_kernel::{
     tools::ToolCatalog,
 };
 use agent_protocol::{FixedClock, RandomIdGenerator, SequenceIdGenerator, SystemClock};
-use code_agent_runtime::guidance::{GuidanceDocument, GuidanceKind};
 use review_app::{
     ReadChangeTool, ReviewApplication, ReviewConfig, run_review as run_composed_review,
 };
@@ -393,16 +392,11 @@ fn requirements_appear_in_orientation_context() {
 }
 
 #[test]
-fn project_guidance_appears_in_orientation_context() {
+fn review_application_requests_project_guidance_tool() {
     let app = ReviewApplication::new_with_sources(
         FixedClock::new("2025-01-01T00:00:00Z"),
         SequenceIdGenerator::new(["rev-001"]),
-    )
-    .with_project_guidance(vec![GuidanceDocument {
-        kind: GuidanceKind::Agents,
-        path: PathBuf::from("/repo/AGENTS.md"),
-        content: "Always include regression tests.".into(),
-    }]);
+    );
     let request = ReviewRequest {
         schema: "review.request/v1".into(),
         repository_path: ".".into(),
@@ -411,14 +405,12 @@ fn project_guidance_appears_in_orientation_context() {
         requirements: None,
     };
     let init = app.initialize(&request).expect("initialize");
-    let context = app.build_context(&init.initial_state);
     assert!(
-        context
+        init.requested_tools
             .iter()
-            .any(|c| c.content.contains("Project AGENTS guidance")
-                && c.content.contains("Always include regression tests.")),
-        "orientation context must include project guidance: {:?}",
-        context
+            .any(|tool| tool == "get_project_guidance"),
+        "review flow must request get_project_guidance tool: {:?}",
+        init.requested_tools
     );
 }
 

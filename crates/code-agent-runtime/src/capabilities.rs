@@ -13,8 +13,8 @@ use agent_kernel::tools::{Tool, ToolCatalog};
 use std::marker::PhantomData;
 
 use crate::tools::{
-    GetChangeSummaryTool, GetChangedFilesTool, ListDirectoryTool, ReadDiffTool, ReadFileTool,
-    ReplaceFileContentTool, SearchTextTool,
+    GetChangeSummaryTool, GetChangedFilesTool, GetProjectGuidanceTool, ListDirectoryTool,
+    ReadDiffTool, ReadFileTool, ReplaceFileContentTool, SearchTextTool,
 };
 
 pub struct ReadOnly;
@@ -70,5 +70,8 @@ impl ToolAllowedIn<ScopedWrite> for ListDirectoryTool {}
 
 impl ToolAllowedIn<ReadOnly> for SearchTextTool {}
 impl ToolAllowedIn<ScopedWrite> for SearchTextTool {}
+
+impl ToolAllowedIn<ReadOnly> for GetProjectGuidanceTool {}
+impl ToolAllowedIn<ScopedWrite> for GetProjectGuidanceTool {}
 
 impl ToolAllowedIn<ScopedWrite> for ReplaceFileContentTool {}
