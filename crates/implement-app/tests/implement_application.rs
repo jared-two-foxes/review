@@ -1,3 +1,4 @@
+use agent_kernel::application::AgentApplication;
 use agent_kernel::coordinator::SessionCoordinator;
 use agent_kernel::limits::Limits;
 use agent_kernel::model::{
@@ -13,11 +14,57 @@ use implement_app::{
 };
 use serde_json::{Value, json};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 struct ScriptedModelProvider {
     responses: Vec<CanonicalModelResponse>,
     index: usize,
+}
+
+struct CapturingModelProvider {
+    responses: Vec<CanonicalModelResponse>,
+    index: usize,
+    captured_contexts: Arc<Mutex<Vec<Vec<String>>>>,
+}
+
+impl CapturingModelProvider {
+    fn new(
+        responses: Vec<CanonicalModelResponse>,
+        captured_contexts: Arc<Mutex<Vec<Vec<String>>>>,
+    ) -> Self {
+        Self {
+            responses,
+            index: 0,
+            captured_contexts,
+        }
+    }
+}
+
+impl ModelProvider for CapturingModelProvider {
+    fn generate(
+        &mut self,
+        request: &CanonicalModelRequest,
+    ) -> Result<CanonicalModelResponse, ModelError> {
+        self.captured_contexts.lock().unwrap().push(
+            request
+                .context
+                .iter()
+                .map(|block| block.content.clone())
+                .collect(),
+        );
+        let response = self.responses[self.index].clone();
+        self.index += 1;
+        Ok(response)
+    }
+
+    fn generate_with_deadline(
+        &mut self,
+        request: &CanonicalModelRequest,
+        _deadline: Instant,
+    ) -> Result<CanonicalModelResponse, ModelError> {
+        self.generate(request)
+    }
 }
 
 impl ScriptedModelProvider {
@@ -358,4 +405,114 @@ fn run_implement_rejects_unknown_provider_prefix() {
     let error = run_implement(&request, &config, None)
         .expect_err("unknown provider prefixes must be rejected");
     assert!(error.contains("unsupported model provider prefix"));
+}
+
+#[test]
+fn implement_application_requests_project_guidance_tool() {
+    let app = ImplementApplication::new_with_sources(
+        agent_protocol::FixedClock::new("2025-01-01T00:00:00Z"),
+        SequenceIdGenerator::new(["impl-001"]),
+    );
+    let request = ImplementRequest {
+        repository_path: ".".into(),
+        target_path: "src/app.txt".into(),
+        expected_content: "before".into(),
+        desired_content: "after".into(),
+    };
+
+    let init = app.initialize(&request).expect("initialize");
+    assert!(
+        init.requested_tools
+            .iter()
+            .any(|tool| tool == "get_project_guidance"),
+        "implement flow must request get_project_guidance tool: {:?}",
+        init.requested_tools
+    );
+}
+
+#[test]
+fn run_implement_includes_project_guidance_in_initial_context() {
+    let repo = make_repo_with_target();
+    std::fs::write(repo.path().join("README.md"), "repo readme").unwrap();
+    std::fs::write(
+        repo.path().join("AGENTS.md"),
+        "Directory summary:\n- src/ contains implementation files.",
+    )
+    .unwrap();
+    std::fs::write(repo.path().join("src/AGENTS.md"), "src guidance").unwrap();
+    let captured_contexts = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
+    let provider = CapturingModelProvider::new(
+        vec![
+            CanonicalModelResponse {
+                actions: vec![ModelAction::ToolCall {
+                    action_id: "inspect".into(),
+                    tool: "read_file".into(),
+                    arguments: json!({"path": "src/app.txt"}),
+                }],
+                usage: scripted_usage(),
+            },
+            CanonicalModelResponse {
+                actions: vec![ModelAction::ToolCall {
+                    action_id: "mutate".into(),
+                    tool: "replace_file_content".into(),
+                    arguments: json!({
+                        "path": "src/app.txt",
+                        "expected": "before\n",
+                        "replacement": "after\n"
+                    }),
+                }],
+                usage: scripted_usage(),
+            },
+            CanonicalModelResponse {
+                actions: vec![ModelAction::ToolCall {
+                    action_id: "verify".into(),
+                    tool: "read_file".into(),
+                    arguments: json!({"path": "src/app.txt"}),
+                }],
+                usage: scripted_usage(),
+            },
+            CanonicalModelResponse {
+                actions: vec![ModelAction::CompletionRequest {
+                    action_id: "complete".into(),
+                    payload: json!({
+                        "ready": true,
+                        "summary": "Applied the requested replacement to src/app.txt."
+                    }),
+                }],
+                usage: scripted_usage(),
+            },
+        ],
+        Arc::clone(&captured_contexts),
+    );
+
+    run_implement_with_provider(
+        &ImplementRequest {
+            repository_path: repo.path().to_string_lossy().into_owned(),
+            target_path: "src/app.txt".into(),
+            expected_content: "before\n".into(),
+            desired_content: "after\n".into(),
+        },
+        &ImplementConfig::default(),
+        provider,
+        None,
+    )
+    .expect("implementor flow should succeed");
+
+    let captured = captured_contexts.lock().unwrap();
+    let first_context = &captured[0];
+    assert!(
+        first_context
+            .iter()
+            .any(|block| block.contains("[untrusted project guidance data")
+                && block.contains("repo readme")),
+        "initial implement context must include README guidance: {:?}",
+        first_context
+    );
+    assert!(
+        first_context
+            .iter()
+            .any(|block| block.contains("src guidance")),
+        "initial implement context must include cascading AGENTS guidance: {:?}",
+        first_context
+    );
 }

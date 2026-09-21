@@ -1,6 +1,7 @@
 pub mod capabilities;
 pub mod diff;
 pub mod error;
+pub mod guidance;
 pub mod identity;
 pub mod provider;
 pub mod repo;

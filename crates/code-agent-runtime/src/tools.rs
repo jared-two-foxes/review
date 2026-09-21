@@ -789,6 +789,205 @@ impl Tool for ListDirectoryTool {
     }
 }
 
+pub struct GetProjectGuidanceTool {
+    repo: GitRepo,
+    head: ReviewTarget,
+    policy: SecurityPolicy,
+    byte_limit: usize,
+}
+
+impl GetProjectGuidanceTool {
+    pub fn new(
+        repo: GitRepo,
+        head: ReviewTarget,
+        policy: SecurityPolicy,
+        byte_limit: usize,
+    ) -> Self {
+        Self {
+            repo,
+            head,
+            policy,
+            byte_limit,
+        }
+    }
+}
+
+impl Tool for GetProjectGuidanceTool {
+    fn name(&self) -> &str {
+        "get_project_guidance"
+    }
+
+    fn description(&self) -> ToolDescription {
+        ToolDescription {
+            name: self.name().to_string(),
+            description: "Read repository guidance documents (README and AGENTS) relevant to a path. Use this to decide whether to explore additional directories.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path"],
+                "properties": {"path": {"type": "string"}}
+            }),
+        }
+    }
+
+    fn validate_arguments(&self, arguments: &Value) -> Result<(), String> {
+        if arguments.get("path").and_then(Value::as_str).is_some()
+            && arguments
+                .as_object()
+                .is_some_and(|object| object.len() == 1)
+        {
+            Ok(())
+        } else {
+            Err("arguments must contain only a string path".to_string())
+        }
+    }
+
+    fn execute(&self, arguments: &Value) -> ToolResult {
+        let requested_path = match arguments.get("path").and_then(Value::as_str) {
+            Some(path) => path,
+            None => {
+                return ToolResult {
+                    status: ToolStatus::Failed,
+                    value: json!({"error": "missing path argument"}),
+                };
+            }
+        };
+
+        if self.policy.is_path_denied(requested_path) {
+            return ToolResult {
+                status: ToolStatus::Denied,
+                value: json!({"error": "path denied"}),
+            };
+        }
+
+        let guidance_scope = guidance_scope_for_path(&self.repo, &self.head, requested_path);
+        if self.policy.is_path_denied(&guidance_scope) {
+            return ToolResult {
+                status: ToolStatus::Denied,
+                value: json!({"error": "path denied"}),
+            };
+        }
+
+        let mut documents = vec![];
+        for readme in ["README.md", "README", "readme.md", "readme"] {
+            if let Some(document) = read_guidance_document(
+                &self.repo,
+                &self.head,
+                &self.policy,
+                self.byte_limit,
+                "readme",
+                readme,
+            ) {
+                documents.push(document);
+                break;
+            }
+        }
+
+        for scope in guidance_scopes_to_root(&guidance_scope) {
+            for candidate in guidance_agents_candidates(&scope) {
+                if let Some(document) = read_guidance_document(
+                    &self.repo,
+                    &self.head,
+                    &self.policy,
+                    self.byte_limit,
+                    "agents",
+                    &candidate,
+                ) {
+                    documents.push(document);
+                    break;
+                }
+            }
+        }
+
+        ToolResult {
+            status: ToolStatus::Succeeded,
+            value: json!({
+                "path": requested_path,
+                "scope": guidance_scope,
+                "documents": documents,
+                "observed_head": self.head.label(&self.repo),
+            }),
+        }
+    }
+}
+
+fn guidance_scope_for_path(repo: &GitRepo, head: &ReviewTarget, path: &str) -> String {
+    if path == "." || path.is_empty() {
+        return ".".to_string();
+    }
+    let path = path.trim_end_matches('/');
+    if path.is_empty() {
+        return ".".to_string();
+    }
+
+    if head.read_file(repo, path).is_ok() {
+        return parent_scope_or_root(path);
+    }
+
+    if repo.root().join(path).is_dir() {
+        return path.to_string();
+    }
+
+    parent_scope_or_root(path)
+}
+
+fn guidance_scopes_to_root(scope: &str) -> Vec<String> {
+    if scope == "." || scope.is_empty() {
+        return vec![".".to_string()];
+    }
+
+    let mut scopes = vec![".".to_string()];
+    let mut current = std::path::PathBuf::new();
+    for component in std::path::Path::new(scope).components() {
+        if let std::path::Component::Normal(part) = component {
+            current.push(part);
+            scopes.push(current.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    scopes
+}
+
+fn guidance_agents_candidates(scope: &str) -> Vec<String> {
+    if scope == "." || scope.is_empty() {
+        vec!["AGENTS.md".to_string(), "agents.md".to_string()]
+    } else {
+        vec![format!("{scope}/AGENTS.md"), format!("{scope}/agents.md")]
+    }
+}
+
+fn parent_scope_or_root(path: &str) -> String {
+    std::path::Path::new(path)
+        .parent()
+        .and_then(|parent| parent.to_str())
+        .filter(|parent| !parent.is_empty())
+        .map(|parent| parent.to_string())
+        .unwrap_or_else(|| ".".to_string())
+}
+
+fn read_guidance_document(
+    repo: &GitRepo,
+    head: &ReviewTarget,
+    policy: &SecurityPolicy,
+    byte_limit: usize,
+    kind: &str,
+    path: &str,
+) -> Option<Value> {
+    if policy.is_path_denied(path) {
+        return None;
+    }
+    let bytes = head.read_file(repo, path).ok()?;
+    let content_id = content_id_for_bytes(&bytes);
+    let bounded = bound_bytes(&bytes, byte_limit);
+    Some(json!({
+        "kind": kind,
+        "path": path,
+        "content": bounded.content,
+        "truncated": bounded.truncated,
+        "completeness": bounded.completeness,
+        "content_id": content_id,
+    }))
+}
+
 pub struct SearchTextTool {
     repo: GitRepo,
     head: ReviewTarget,

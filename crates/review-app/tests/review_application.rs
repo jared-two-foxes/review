@@ -10,6 +10,7 @@ use agent_kernel::{
 use agent_protocol::{FixedClock, RandomIdGenerator, SequenceIdGenerator, SystemClock};
 use review_app::{
     ReadChangeTool, ReviewApplication, ReviewConfig, run_review as run_composed_review,
+    run_review_with_provider,
 };
 use review_protocol::{ReviewRequest, ReviewResult, ReviewStatus};
 use serde_json::json;
@@ -23,6 +24,51 @@ use std::time::{SystemTime, UNIX_EPOCH};
 struct ScriptedModelProvider {
     responses: Vec<CanonicalModelResponse>,
     index: usize,
+}
+
+struct CapturingModelProvider {
+    responses: Vec<CanonicalModelResponse>,
+    index: usize,
+    captured_contexts: Arc<Mutex<Vec<Vec<String>>>>,
+}
+
+impl CapturingModelProvider {
+    fn new(
+        responses: Vec<CanonicalModelResponse>,
+        captured_contexts: Arc<Mutex<Vec<Vec<String>>>>,
+    ) -> Self {
+        Self {
+            responses,
+            index: 0,
+            captured_contexts,
+        }
+    }
+}
+
+impl ModelProvider for CapturingModelProvider {
+    fn generate(
+        &mut self,
+        request: &CanonicalModelRequest,
+    ) -> Result<CanonicalModelResponse, ModelError> {
+        self.captured_contexts.lock().unwrap().push(
+            request
+                .context
+                .iter()
+                .map(|block| block.content.clone())
+                .collect(),
+        );
+        let response = self.responses[self.index].clone();
+        self.index += 1;
+        Ok(response)
+    }
+
+    fn generate_with_deadline(
+        &mut self,
+        request: &CanonicalModelRequest,
+        _deadline: std::time::Instant,
+    ) -> Result<CanonicalModelResponse, ModelError> {
+        self.generate(request)
+    }
 }
 
 impl ScriptedModelProvider {
@@ -389,6 +435,117 @@ fn requirements_appear_in_orientation_context() {
         "orientation context must include the requirements content: {:?}",
         context
     );
+}
+
+#[test]
+fn review_application_requests_project_guidance_tool() {
+    let app = ReviewApplication::new_with_sources(
+        FixedClock::new("2025-01-01T00:00:00Z"),
+        SequenceIdGenerator::new(["rev-001"]),
+    );
+    let request = ReviewRequest {
+        schema: "review.request/v1".into(),
+        repository_path: ".".into(),
+        base_ref: "HEAD~1".into(),
+        head_ref: "HEAD".into(),
+        requirements: None,
+    };
+    let init = app.initialize(&request).expect("initialize");
+    assert!(
+        init.requested_tools
+            .iter()
+            .any(|tool| tool == "get_project_guidance"),
+        "review flow must request get_project_guidance tool: {:?}",
+        init.requested_tools
+    );
+}
+
+#[test]
+fn run_review_includes_project_guidance_in_initial_context() {
+    let root = unique_test_directory();
+    create_two_commit_repository(&root);
+    std::fs::write(root.join("README.md"), "repo readme").unwrap();
+    std::fs::write(root.join("AGENTS.md"), "root guidance").unwrap();
+    let captured_contexts = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
+    let provider = CapturingModelProvider::new(
+        vec![
+            CanonicalModelResponse {
+                actions: vec![ModelAction::ToolCall {
+                    action_id: "summary".into(),
+                    tool: "get_change_summary".into(),
+                    arguments: json!({}),
+                }],
+                usage: None,
+            },
+            CanonicalModelResponse {
+                actions: vec![ModelAction::ToolCall {
+                    action_id: "files".into(),
+                    tool: "get_changed_files".into(),
+                    arguments: json!({}),
+                }],
+                usage: None,
+            },
+            CanonicalModelResponse {
+                actions: vec![ModelAction::ToolCall {
+                    action_id: "read".into(),
+                    tool: "read_file".into(),
+                    arguments: json!({"path": "src/main.rs"}),
+                }],
+                usage: None,
+            },
+            CanonicalModelResponse {
+                actions: vec![ModelAction::CompletionRequest {
+                    action_id: "complete".into(),
+                    payload: json!({
+                        "findings": [{
+                            "blocking": false,
+                            "message": "The change updates src/main.rs.",
+                            "path": "src/main.rs",
+                            "line": 1,
+                            "severity": "low",
+                            "recommendation": null
+                        }]
+                    }),
+                }],
+                usage: None,
+            },
+        ],
+        Arc::clone(&captured_contexts),
+    );
+
+    run_review_with_provider(
+        &ReviewRequest {
+            schema: "review.request/v1".into(),
+            repository_path: root.to_string_lossy().into_owned(),
+            base_ref: "HEAD~1".into(),
+            head_ref: "HEAD".into(),
+            requirements: None,
+        },
+        &ReviewConfig::default(),
+        provider,
+        None,
+    )
+    .expect("review flow should succeed");
+
+    let captured = captured_contexts.lock().unwrap();
+    let first_context = &captured[0];
+    assert!(
+        first_context
+            .iter()
+            .any(|block| block.contains("[untrusted project guidance data")
+                && block.contains("repo readme")),
+        "initial review context must include README guidance: {:?}",
+        first_context
+    );
+    assert!(
+        first_context
+            .iter()
+            .any(|block| block.contains("root guidance")),
+        "initial review context must include AGENTS guidance: {:?}",
+        first_context
+    );
+
+    std::fs::remove_dir_all(root).expect("remove test repository");
 }
 
 #[test]
