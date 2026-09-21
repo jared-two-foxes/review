@@ -42,6 +42,7 @@ fn get_project_guidance_scopes_new_file_paths_to_parent_directory() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     std::fs::create_dir_all(dir.path().join("src/nested")).unwrap();
+    std::fs::write(dir.path().join("README.md"), "repo readme").unwrap();
     std::fs::write(dir.path().join("AGENTS.md"), "root guidance").unwrap();
     std::fs::write(dir.path().join("src/AGENTS.md"), "src guidance").unwrap();
     std::fs::write(dir.path().join("src/nested/AGENTS.md"), "nested guidance").unwrap();
@@ -58,6 +59,9 @@ fn get_project_guidance_scopes_new_file_paths_to_parent_directory() {
     assert!(matches!(result.status, ToolStatus::Succeeded));
     assert_eq!(result.value["scope"], "src/nested");
     let documents = result.value["documents"].as_array().unwrap();
-    assert_eq!(documents.len(), 1);
-    assert_eq!(documents[0]["path"], "src/nested/AGENTS.md");
+    assert_eq!(documents.len(), 4);
+    assert_eq!(documents[0]["path"], "README.md");
+    assert_eq!(documents[1]["path"], "AGENTS.md");
+    assert_eq!(documents[2]["path"], "src/AGENTS.md");
+    assert_eq!(documents[3]["path"], "src/nested/AGENTS.md");
 }

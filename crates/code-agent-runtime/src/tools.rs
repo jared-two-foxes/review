@@ -869,41 +869,33 @@ impl Tool for GetProjectGuidanceTool {
         }
 
         let mut documents = vec![];
-        if guidance_scope == "." || guidance_scope.is_empty() {
-            for readme in ["README.md", "README", "readme.md", "readme"] {
-                if let Some(document) = read_guidance_document(
-                    &self.repo,
-                    &self.head,
-                    &self.policy,
-                    self.byte_limit,
-                    "readme",
-                    readme,
-                ) {
-                    documents.push(document);
-                    break;
-                }
-            }
-        }
-
-        let agents_candidates = if guidance_scope == "." || guidance_scope.is_empty() {
-            vec!["AGENTS.md".to_string(), "agents.md".to_string()]
-        } else {
-            vec![
-                format!("{}/AGENTS.md", guidance_scope),
-                format!("{}/agents.md", guidance_scope),
-            ]
-        };
-        for candidate in agents_candidates {
+        for readme in ["README.md", "README", "readme.md", "readme"] {
             if let Some(document) = read_guidance_document(
                 &self.repo,
                 &self.head,
                 &self.policy,
                 self.byte_limit,
-                "agents",
-                &candidate,
+                "readme",
+                readme,
             ) {
                 documents.push(document);
                 break;
+            }
+        }
+
+        for scope in guidance_scopes_to_root(&guidance_scope) {
+            for candidate in guidance_agents_candidates(&scope) {
+                if let Some(document) = read_guidance_document(
+                    &self.repo,
+                    &self.head,
+                    &self.policy,
+                    self.byte_limit,
+                    "agents",
+                    &candidate,
+                ) {
+                    documents.push(document);
+                    break;
+                }
             }
         }
 
@@ -948,6 +940,30 @@ fn guidance_scope_for_path(repo: &GitRepo, head: &ReviewTarget, path: &str) -> S
     }
 
     path.to_string()
+}
+
+fn guidance_scopes_to_root(scope: &str) -> Vec<String> {
+    if scope == "." || scope.is_empty() {
+        return vec![".".to_string()];
+    }
+
+    let mut scopes = vec![".".to_string()];
+    let mut current = std::path::PathBuf::new();
+    for component in std::path::Path::new(scope).components() {
+        if let std::path::Component::Normal(part) = component {
+            current.push(part);
+            scopes.push(current.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    scopes
+}
+
+fn guidance_agents_candidates(scope: &str) -> Vec<String> {
+    if scope == "." || scope.is_empty() {
+        vec!["AGENTS.md".to_string(), "agents.md".to_string()]
+    } else {
+        vec![format!("{scope}/AGENTS.md"), format!("{scope}/agents.md")]
+    }
 }
 
 fn read_guidance_document(
