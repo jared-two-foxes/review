@@ -35,14 +35,17 @@ fn main() {
     let mut desired_content: Option<String> = None;
     let mut ledger_path: Option<String> = None;
 
+    let mut parsed_run_subcommand = false;
     let mut i = 1;
     while i < args.len() {
-        if let Some(target) = requested_help(&args, i) {
+        if let Some(target) = requested_help(&args, i, parsed_run_subcommand) {
             print_requested_help(target);
         }
 
         match args[i].as_str() {
-            "run" => {}
+            "run" => {
+                parsed_run_subcommand = true;
+            }
             "--request" => {
                 request_path = Some(flag_value(&args, i, "--request"));
                 i += 1;
@@ -267,22 +270,24 @@ enum HelpTarget {
     Run,
 }
 
-fn requested_help(args: &[String], index: usize) -> Option<HelpTarget> {
+fn requested_help(
+    args: &[String],
+    index: usize,
+    parsed_run_subcommand: bool,
+) -> Option<HelpTarget> {
     match args.get(index).map(String::as_str) {
-        Some("--help") | Some("-h") => match index {
-            1 if args.len() == 2 => Some(HelpTarget::Root),
-            2 if args.len() == 3 && args.get(1).is_some_and(|arg| arg == "run") => {
-                Some(HelpTarget::Run)
-            }
-            _ => None,
-        },
-        Some("help") => match index {
-            1 if args.len() == 2 => Some(HelpTarget::Root),
-            1 if args.len() == 3 && args.get(2).is_some_and(|arg| arg == "run") => {
-                Some(HelpTarget::Run)
-            }
-            _ => None,
-        },
+        Some("--help") | Some("-h") => Some(if parsed_run_subcommand {
+            HelpTarget::Run
+        } else {
+            HelpTarget::Root
+        }),
+        Some("help") => Some(
+            if parsed_run_subcommand || args.get(index + 1).is_some_and(|arg| arg == "run") {
+                HelpTarget::Run
+            } else {
+                HelpTarget::Root
+            },
+        ),
         _ => None,
     }
 }
