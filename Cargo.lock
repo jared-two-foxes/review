@@ -1062,6 +1062,7 @@ dependencies = [
 name = "implement-cli"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "cli-common",
  "ctrlc",
  "implement-app",
@@ -1768,6 +1769,7 @@ dependencies = [
 name = "review-cli"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "cli-common",
  "code-agent-runtime",
  "ctrlc",
