@@ -1,3 +1,4 @@
+use agent_kernel::application::AgentApplication;
 use agent_kernel::coordinator::SessionCoordinator;
 use agent_kernel::limits::Limits;
 use agent_kernel::model::{
@@ -6,6 +7,7 @@ use agent_kernel::model::{
 };
 use agent_kernel::tools::{Tool, ToolCatalog, ToolResult, ToolStatus};
 use agent_protocol::SequenceIdGenerator;
+use code_agent_runtime::guidance::{GuidanceDocument, GuidanceKind};
 use code_agent_runtime::identity::content_id_for_bytes;
 use implement_app::{
     ImplementApplication, ImplementConfig, ImplementReason, ImplementRequest, ImplementStatus,
@@ -13,6 +15,7 @@ use implement_app::{
 };
 use serde_json::{Value, json};
 use std::process::Command;
+use std::path::PathBuf;
 use std::time::Instant;
 
 struct ScriptedModelProvider {
@@ -358,4 +361,33 @@ fn run_implement_rejects_unknown_provider_prefix() {
     let error = run_implement(&request, &config, None)
         .expect_err("unknown provider prefixes must be rejected");
     assert!(error.contains("unsupported model provider prefix"));
+}
+
+#[test]
+fn project_guidance_appears_in_implement_context() {
+    let app = ImplementApplication::new_with_sources(
+        agent_protocol::FixedClock::new("2025-01-01T00:00:00Z"),
+        SequenceIdGenerator::new(["impl-001"]),
+    )
+    .with_project_guidance(vec![GuidanceDocument {
+        kind: GuidanceKind::Readme,
+        path: PathBuf::from("/repo/README.md"),
+        content: "Project overview".into(),
+    }]);
+    let request = ImplementRequest {
+        repository_path: ".".into(),
+        target_path: "src/app.txt".into(),
+        expected_content: "before".into(),
+        desired_content: "after".into(),
+    };
+
+    let init = app.initialize(&request).expect("initialize");
+    let context = app.build_context(&init.initial_state);
+    assert!(
+        context
+            .iter()
+            .any(|c| c.content.contains("Project README") && c.content.contains("Project overview")),
+        "orientation context must include project guidance: {:?}",
+        context
+    );
 }

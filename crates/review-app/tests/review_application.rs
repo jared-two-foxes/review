@@ -8,6 +8,7 @@ use agent_kernel::{
     tools::ToolCatalog,
 };
 use agent_protocol::{FixedClock, RandomIdGenerator, SequenceIdGenerator, SystemClock};
+use code_agent_runtime::guidance::{GuidanceDocument, GuidanceKind};
 use review_app::{
     ReadChangeTool, ReviewApplication, ReviewConfig, run_review as run_composed_review,
 };
@@ -387,6 +388,36 @@ fn requirements_appear_in_orientation_context() {
     assert!(
         context.iter().any(|c| c.content.contains("retry logic")),
         "orientation context must include the requirements content: {:?}",
+        context
+    );
+}
+
+#[test]
+fn project_guidance_appears_in_orientation_context() {
+    let app = ReviewApplication::new_with_sources(
+        FixedClock::new("2025-01-01T00:00:00Z"),
+        SequenceIdGenerator::new(["rev-001"]),
+    )
+    .with_project_guidance(vec![GuidanceDocument {
+        kind: GuidanceKind::Agents,
+        path: PathBuf::from("/repo/AGENTS.md"),
+        content: "Always include regression tests.".into(),
+    }]);
+    let request = ReviewRequest {
+        schema: "review.request/v1".into(),
+        repository_path: ".".into(),
+        base_ref: "HEAD~1".into(),
+        head_ref: "HEAD".into(),
+        requirements: None,
+    };
+    let init = app.initialize(&request).expect("initialize");
+    let context = app.build_context(&init.initial_state);
+    assert!(
+        context
+            .iter()
+            .any(|c| c.content.contains("Project AGENTS guidance")
+                && c.content.contains("Always include regression tests.")),
+        "orientation context must include project guidance: {:?}",
         context
     );
 }
