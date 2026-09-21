@@ -26,6 +26,20 @@ fn collects_readme_and_root_agents() {
 }
 
 #[test]
+fn collects_guidance_from_plain_directories_without_a_git_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("README.md"), "readme text").unwrap();
+    std::fs::write(dir.path().join("AGENTS.md"), "root agent").unwrap();
+
+    let docs = collect_guidance_documents(dir.path(), None);
+    assert_eq!(docs.len(), 2);
+    assert_eq!(docs[0].kind, GuidanceKind::Readme);
+    assert!(docs[0].content.contains("readme text"));
+    assert_eq!(docs[1].kind, GuidanceKind::Agents);
+    assert!(docs[1].content.contains("root agent"));
+}
+
+#[test]
 fn cascades_agents_from_root_to_target_directory() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
