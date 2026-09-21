@@ -216,10 +216,11 @@ fn maybe_print_help(args: &[String]) {
         }
         ["run", "--help"] | ["run", "-h"] | ["help", "run"] => {
             let mut command = review_cli_command();
-            if let Some(run) = command.find_subcommand_mut("run") {
-                print_help(run.clone());
-            }
-            print_help(command);
+            let run = command
+                .find_subcommand_mut("run")
+                .expect("review-cli help must define the run subcommand")
+                .clone();
+            print_help(run);
         }
         _ => {}
     }
