@@ -1,4 +1,5 @@
-use std::fs;
+use crate::repo::GitRepo;
+use crate::security::SecurityPolicy;
 use std::path::{Path, PathBuf};
 
 const MAX_GUIDANCE_BYTES: usize = 65_536;
@@ -16,10 +17,17 @@ pub struct GuidanceDocument {
     pub content: String,
 }
 
-pub fn collect_guidance_documents(repository_path: &Path, focus_path: Option<&str>) -> Vec<GuidanceDocument> {
+pub fn collect_guidance_documents(
+    repository_path: &Path,
+    focus_path: Option<&str>,
+) -> Vec<GuidanceDocument> {
+    let Ok(repo) = GitRepo::open(repository_path) else {
+        return vec![];
+    };
+    let policy = SecurityPolicy::with_bytes_limit(MAX_GUIDANCE_BYTES);
     let mut documents = vec![];
 
-    if let Some(readme) = read_readme(repository_path) {
+    if let Some(readme) = read_readme(&repo, &policy) {
         documents.push(GuidanceDocument {
             kind: GuidanceKind::Readme,
             path: readme.0,
@@ -27,7 +35,7 @@ pub fn collect_guidance_documents(repository_path: &Path, focus_path: Option<&st
         });
     }
 
-    for (path, content) in read_cascading_agents(repository_path, focus_path) {
+    for (path, content) in read_cascading_agents(&repo, &policy, focus_path) {
         documents.push(GuidanceDocument {
             kind: GuidanceKind::Agents,
             path,
@@ -38,27 +46,36 @@ pub fn collect_guidance_documents(repository_path: &Path, focus_path: Option<&st
     documents
 }
 
-fn read_readme(repository_path: &Path) -> Option<(PathBuf, String)> {
+fn read_readme(repo: &GitRepo, policy: &SecurityPolicy) -> Option<(PathBuf, String)> {
     for candidate in ["README.md", "README", "readme.md", "readme"] {
-        let path = repository_path.join(candidate);
-        if let Some(content) = read_file_limited(&path) {
+        let path = repo.root().join(candidate);
+        if let Some(content) = read_file_limited(repo, policy, candidate) {
             return Some((path, content));
         }
     }
     None
 }
 
-fn read_cascading_agents(repository_path: &Path, focus_path: Option<&str>) -> Vec<(PathBuf, String)> {
+fn read_cascading_agents(
+    repo: &GitRepo,
+    policy: &SecurityPolicy,
+    focus_path: Option<&str>,
+) -> Vec<(PathBuf, String)> {
     let mut results = vec![];
-    for directory in cascading_directories(repository_path, focus_path) {
-        if let Some(found) = read_agents_in_directory(&directory) {
+    for directory in cascading_directories(repo, policy, focus_path) {
+        if let Some(found) = read_agents_in_directory(repo, policy, &directory) {
             results.push(found);
         }
     }
     results
 }
 
-fn cascading_directories(repository_path: &Path, focus_path: Option<&str>) -> Vec<PathBuf> {
+fn cascading_directories(
+    repo: &GitRepo,
+    policy: &SecurityPolicy,
+    focus_path: Option<&str>,
+) -> Vec<PathBuf> {
+    let repository_path = repo.root();
     let mut directories = vec![repository_path.to_path_buf()];
     let Some(focus_path) = focus_path else {
         return directories;
@@ -90,7 +107,8 @@ fn cascading_directories(repository_path: &Path, focus_path: Option<&str>) -> Ve
         return directories;
     }
 
-    let mut parent_agents = read_agents_in_directory(repository_path).map(|(_, content)| content);
+    let mut parent_agents =
+        read_agents_in_directory(repo, policy, repository_path).map(|(_, content)| content);
     let mut partial = PathBuf::new();
     for segment in segments {
         if let Some(content) = &parent_agents
@@ -101,7 +119,8 @@ fn cascading_directories(repository_path: &Path, focus_path: Option<&str>) -> Ve
         partial.push(segment);
         let next_directory = repository_path.join(&partial);
         directories.push(next_directory.clone());
-        parent_agents = read_agents_in_directory(&next_directory).map(|(_, content)| content);
+        parent_agents =
+            read_agents_in_directory(repo, policy, &next_directory).map(|(_, content)| content);
     }
 
     directories
@@ -126,22 +145,28 @@ fn guidance_recommends_descending(parent_guidance: &str, child_segment: &Path) -
     guidance.contains(&child) || guidance.contains(&format!("{child}/"))
 }
 
-fn read_agents_in_directory(directory: &Path) -> Option<(PathBuf, String)> {
+fn read_agents_in_directory(
+    repo: &GitRepo,
+    policy: &SecurityPolicy,
+    directory: &Path,
+) -> Option<(PathBuf, String)> {
+    let relative_directory = directory.strip_prefix(repo.root()).ok()?;
     for candidate in ["AGENTS.md", "agents.md"] {
         let path = directory.join(candidate);
-        if let Some(content) = read_file_limited(&path) {
+        let relative_path = relative_directory.join(candidate);
+        let Some(relative_path) = relative_path.to_str() else {
+            continue;
+        };
+        if let Some(content) = read_file_limited(repo, policy, relative_path) {
             return Some((path, content));
         }
     }
     None
 }
 
-fn read_file_limited(path: &Path) -> Option<String> {
-    let bytes = fs::read(path).ok()?;
-    let limited = if bytes.len() > MAX_GUIDANCE_BYTES {
-        &bytes[..MAX_GUIDANCE_BYTES]
-    } else {
-        &bytes[..]
-    };
-    Some(String::from_utf8_lossy(limited).into_owned())
+fn read_file_limited(repo: &GitRepo, policy: &SecurityPolicy, path: &str) -> Option<String> {
+    policy
+        .read_file(repo, path)
+        .ok()
+        .map(|bounded| bounded.content)
 }
