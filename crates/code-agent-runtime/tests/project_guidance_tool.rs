@@ -65,3 +65,30 @@ fn get_project_guidance_scopes_new_file_paths_to_parent_directory() {
     assert_eq!(documents[2]["path"], "src/AGENTS.md");
     assert_eq!(documents[3]["path"], "src/nested/AGENTS.md");
 }
+
+#[test]
+fn get_project_guidance_scopes_extensionless_new_file_paths_to_parent_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("README.md"), "repo readme").unwrap();
+    std::fs::write(dir.path().join("AGENTS.md"), "root guidance").unwrap();
+    std::fs::write(dir.path().join("src/AGENTS.md"), "src guidance").unwrap();
+
+    let repo = GitRepo::open(dir.path()).unwrap();
+    let tool = GetProjectGuidanceTool::new(
+        repo,
+        ReviewTarget::WorkingDirectory,
+        SecurityPolicy::new(),
+        65_536,
+    );
+    let result = (&tool as &dyn Tool).execute(&json!({"path":"src/Makefile"}));
+
+    assert!(matches!(result.status, ToolStatus::Succeeded));
+    assert_eq!(result.value["scope"], "src");
+    let documents = result.value["documents"].as_array().unwrap();
+    assert_eq!(documents.len(), 3);
+    assert_eq!(documents[0]["path"], "README.md");
+    assert_eq!(documents[1]["path"], "AGENTS.md");
+    assert_eq!(documents[2]["path"], "src/AGENTS.md");
+}

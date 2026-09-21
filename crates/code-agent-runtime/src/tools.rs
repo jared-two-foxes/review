@@ -921,25 +921,14 @@ fn guidance_scope_for_path(repo: &GitRepo, head: &ReviewTarget, path: &str) -> S
     }
 
     if head.read_file(repo, path).is_ok() {
-        return std::path::Path::new(path)
-            .parent()
-            .and_then(|parent| parent.to_str())
-            .filter(|parent| !parent.is_empty())
-            .map(|parent| parent.to_string())
-            .unwrap_or_else(|| ".".to_string());
+        return parent_scope_or_root(path);
     }
 
-    let path_obj = std::path::Path::new(path);
-    if path_obj.extension().is_some() {
-        return path_obj
-            .parent()
-            .and_then(|parent| parent.to_str())
-            .filter(|parent| !parent.is_empty())
-            .map(|parent| parent.to_string())
-            .unwrap_or_else(|| ".".to_string());
+    if repo.root().join(path).is_dir() {
+        return path.to_string();
     }
 
-    path.to_string()
+    parent_scope_or_root(path)
 }
 
 fn guidance_scopes_to_root(scope: &str) -> Vec<String> {
@@ -964,6 +953,15 @@ fn guidance_agents_candidates(scope: &str) -> Vec<String> {
     } else {
         vec![format!("{scope}/AGENTS.md"), format!("{scope}/agents.md")]
     }
+}
+
+fn parent_scope_or_root(path: &str) -> String {
+    std::path::Path::new(path)
+        .parent()
+        .and_then(|parent| parent.to_str())
+        .filter(|parent| !parent.is_empty())
+        .map(|parent| parent.to_string())
+        .unwrap_or_else(|| ".".to_string())
 }
 
 fn read_guidance_document(
