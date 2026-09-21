@@ -68,37 +68,34 @@ fn cascading_directories(repository_path: &Path, focus_path: Option<&str>) -> Ve
         return directories;
     }
 
-    let joined = repository_path.join(focus_path);
-    let focus_directory = if joined.is_dir() {
-        Some(joined)
-    } else {
-        joined.parent().map(Path::to_path_buf)
-    };
-
-    let Some(mut current) = focus_directory else {
-        return directories;
-    };
-
-    let Ok(repository_canonical) = repository_path.canonicalize() else {
-        return directories;
-    };
-
-    let mut stack = vec![];
-    while let Ok(canonical) = current.canonicalize() {
-        if !canonical.starts_with(&repository_canonical) {
-            break;
+    let mut segments: Vec<PathBuf> = vec![];
+    for component in Path::new(focus_path).components() {
+        match component {
+            std::path::Component::Normal(part) => segments.push(PathBuf::from(part)),
+            std::path::Component::ParentDir => {
+                segments.pop();
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return directories;
+            }
         }
-        if canonical == repository_canonical {
-            break;
-        }
-        stack.push(canonical);
-        let Some(parent) = current.parent() else {
-            break;
-        };
-        current = parent.to_path_buf();
     }
-    stack.reverse();
-    directories.extend(stack);
+
+    if !focus_path.ends_with('/') && !segments.is_empty() {
+        segments.pop();
+    }
+
+    if segments.is_empty() {
+        return directories;
+    }
+
+    let mut partial = PathBuf::new();
+    for segment in segments {
+        partial.push(segment);
+        directories.push(repository_path.join(&partial));
+    }
+
     directories
 }
 
