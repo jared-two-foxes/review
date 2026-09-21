@@ -20,7 +20,6 @@ struct AgentError {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    maybe_print_help(&args);
 
     let mut request_path: Option<String> = None;
     let mut model: String = "gpt-4o".into();
@@ -38,6 +37,10 @@ fn main() {
 
     let mut i = 1;
     while i < args.len() {
+        if let Some(target) = requested_help(&args, i) {
+            print_requested_help(target);
+        }
+
         match args[i].as_str() {
             "run" => {}
             "--request" => {
@@ -259,22 +262,28 @@ fn main() {
     std::process::exit(exit_code_for_result(&result));
 }
 
-fn maybe_print_help(args: &[String]) {
-    let help_args = args.iter().skip(1).map(String::as_str).collect::<Vec<_>>();
+enum HelpTarget {
+    Root,
+    Run,
+}
 
-    match help_args.as_slice() {
-        ["--help"] | ["-h"] | ["help"] => {
-            print_help(implement_cli_command());
-        }
-        ["run", "--help"] | ["run", "-h"] | ["help", "run"] => {
-            let mut command = implement_cli_command();
-            let run = command
-                .find_subcommand_mut("run")
-                .expect("implement-cli help must define the run subcommand")
-                .clone();
-            print_help(run);
-        }
-        _ => {}
+fn requested_help(args: &[String], index: usize) -> Option<HelpTarget> {
+    match args.get(index).map(String::as_str) {
+        Some("--help") | Some("-h") => match index {
+            1 if args.len() == 2 => Some(HelpTarget::Root),
+            2 if args.len() == 3 && args.get(1).is_some_and(|arg| arg == "run") => {
+                Some(HelpTarget::Run)
+            }
+            _ => None,
+        },
+        Some("help") => match index {
+            1 if args.len() == 2 => Some(HelpTarget::Root),
+            1 if args.len() == 3 && args.get(2).is_some_and(|arg| arg == "run") => {
+                Some(HelpTarget::Run)
+            }
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -284,6 +293,20 @@ fn print_help(mut command: Command) -> ! {
         .expect("failed to write help output");
     println!();
     std::process::exit(0);
+}
+
+fn print_requested_help(target: HelpTarget) -> ! {
+    match target {
+        HelpTarget::Root => print_help(implement_cli_command()),
+        HelpTarget::Run => {
+            let mut command = implement_cli_command();
+            let run = command
+                .find_subcommand_mut("run")
+                .expect("implement-cli help must define the run subcommand")
+                .clone();
+            print_help(run);
+        }
+    }
 }
 
 fn implement_cli_command() -> Command {
