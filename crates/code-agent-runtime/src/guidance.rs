@@ -90,13 +90,40 @@ fn cascading_directories(repository_path: &Path, focus_path: Option<&str>) -> Ve
         return directories;
     }
 
+    let mut parent_agents = read_agents_in_directory(repository_path).map(|(_, content)| content);
     let mut partial = PathBuf::new();
     for segment in segments {
+        if let Some(content) = &parent_agents
+            && !guidance_recommends_descending(content, &segment)
+        {
+            break;
+        }
         partial.push(segment);
-        directories.push(repository_path.join(&partial));
+        let next_directory = repository_path.join(&partial);
+        directories.push(next_directory.clone());
+        parent_agents = read_agents_in_directory(&next_directory).map(|(_, content)| content);
     }
 
     directories
+}
+
+fn guidance_recommends_descending(parent_guidance: &str, child_segment: &Path) -> bool {
+    let guidance = parent_guidance.to_ascii_lowercase();
+    let child = child_segment.to_string_lossy().to_ascii_lowercase();
+    if child.is_empty() {
+        return false;
+    }
+
+    if guidance.contains("all directories")
+        || guidance.contains("all files")
+        || guidance.contains("entire repository")
+        || guidance.contains("entire repo")
+        || guidance.contains("any path")
+    {
+        return true;
+    }
+
+    guidance.contains(&child) || guidance.contains(&format!("{child}/"))
 }
 
 fn read_agents_in_directory(directory: &Path) -> Option<(PathBuf, String)> {
