@@ -33,7 +33,8 @@ fn live_binary_emits_verdict_with_findings() {
         std::env::temp_dir().join(format!("review-live-request-{}.json", std::process::id()));
     fs::write(&request_path, request.to_string()).expect("write live request");
 
-    let model = std::env::var("REVIEW_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
+    let model =
+        std::env::var("REVIEW_MODEL").unwrap_or_else(|_| "opencode/gpt-5.6-terra".to_string());
     let base_url = std::env::var("REVIEW_BASE_URL").ok();
     let mut args = vec![
         "run".to_string(),

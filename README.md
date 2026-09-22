@@ -78,10 +78,10 @@ Common flags include:
 
 Provider routing is model-driven:
 
-- `--model gpt-4o` (or any unprefixed model) routes to OpenAI (`OPENAI_API_KEY`)
+- `--model opencode/gpt-5.6-terra` (or any unprefixed model) routes to OpenAI (`OPENCODE_API_KEY`)
 - `--model openai/<model-name>` routes to OpenAI (`OPENAI_API_KEY`)
 - `--model ollama/<model-name>` routes to Ollama (`http://127.0.0.1:11434/v1/chat/completions`)
-- `--model opencode/<model-name>` routes to OpenCode (`https://api.opencode.ai/v1/chat/completions`, `OPENCODE_API_KEY`)
+- `--model opencode/<model-name>` routes to OpenCode (`https://opencode.ai/zen/v1/chat/completions`, `OPENCODE_API_KEY`)
 - `--model copilot/<model-name>` or `--model github-copilot/<model-name>` routes to GitHub Copilot (`GITHUB_TOKEN`)
 
 The `implement-cli` binary follows the same provider-routing model and runtime flags, but builds `ImplementRequest` values instead. It supports either:

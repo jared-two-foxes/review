@@ -39,7 +39,7 @@ pub fn resolve_provider_route(
                 std::env::var("OLLAMA_API_KEY").unwrap_or_else(|_| "ollama".into()),
             ),
             "opencode" => (
-                "https://api.opencode.ai/v1/chat/completions",
+                "https://opencode.ai/zen/v1/chat/completions",
                 std::env::var("OPENCODE_API_KEY").unwrap_or_default(),
             ),
             "copilot" | "github-copilot" => (
@@ -59,7 +59,9 @@ pub fn resolve_provider_route(
         return Ok(ProviderRoute {
             model: provider_model.to_string(),
             base_url: explicit_base_url.unwrap_or(default_base_url).to_string(),
-            api_key: explicit_api_key.unwrap_or(default_api_key.as_str()).to_string(),
+            api_key: explicit_api_key
+                .unwrap_or(default_api_key.as_str())
+                .to_string(),
         });
     }
 
@@ -68,7 +70,9 @@ pub fn resolve_provider_route(
     Ok(ProviderRoute {
         model: model.to_string(),
         base_url: explicit_base_url.unwrap_or(default_base_url).to_string(),
-        api_key: explicit_api_key.unwrap_or(default_api_key.as_str()).to_string(),
+        api_key: explicit_api_key
+            .unwrap_or(default_api_key.as_str())
+            .to_string(),
     })
 }
 

@@ -69,7 +69,7 @@ impl Default for ReviewConfig {
     fn default() -> Self {
         Self {
             api_key: String::new(),
-            model: "gpt-4o".to_string(),
+            model: "opencode/gpt-5.6-terra".to_string(),
             base_url: "https://api.openai.com/v1".to_string(),
             max_turns: 10,
             max_tool_calls: 10,

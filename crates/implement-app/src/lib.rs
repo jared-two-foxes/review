@@ -40,7 +40,7 @@ impl Default for ImplementConfig {
     fn default() -> Self {
         Self {
             api_key: None,
-            model: "gpt-4o".to_string(),
+            model: "opencode/gpt-5.6-terra".to_string(),
             base_url: None,
             max_turns: 10,
             max_tool_calls: 10,
