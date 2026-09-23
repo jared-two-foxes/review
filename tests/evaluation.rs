@@ -269,7 +269,6 @@ fn evaluates_each_seeded_repository_with_scripted_provider() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/repositories");
     fs::create_dir_all(&root).expect("create evaluation repository root");
     let config = ReviewConfig {
-        api_key: "not-needed-in-scripted-mode".into(),
         wall_clock_budget: None,
         ..ReviewConfig::default()
     };
@@ -413,9 +412,6 @@ fn evaluates_each_seeded_repository_with_scripted_provider() {
 
         if let Some(api_key) = &live_api_key {
             let live_config = ReviewConfig {
-                api_key: api_key.clone(),
-                base_url: std::env::var("REVIEW_BASE_URL")
-                    .unwrap_or_else(|_| "https://api.openai.com/v1/chat/completions".into()),
                 model: std::env::var("REVIEW_MODEL")
                     .unwrap_or_else(|_| "opencode/gpt-5.6-terra".into()),
                 max_turns: 15,

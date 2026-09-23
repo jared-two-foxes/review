@@ -22,8 +22,8 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     let mut request_path: Option<String> = None;
-    let mut model: String = "opencode/gpt-5.6-terra".into();
-    let mut base_url: Option<String> = None;
+    let mut model: String = "openai/gpt-5.6-terra".into();
+    let mut provider_root: Option<String> = None;
     let mut max_turns: u32 = 10;
     let mut wall_clock_budget_secs: u64 = 60;
     let mut max_input_tokens: Option<u64> = None;
@@ -67,7 +67,7 @@ fn main() {
                 i += 1;
             }
             "--base-url" => {
-                base_url = Some(flag_value(&args, i, "--base-url"));
+                provider_root = Some(flag_value(&args, i, "--base-url"));
                 i += 1;
             }
             "--max-turns" => {
@@ -203,7 +203,7 @@ fn main() {
     let config = ImplementConfig {
         api_key: None,
         model,
-        base_url,
+        provider_root,
         max_turns,
         max_tool_calls: 10,
         max_completion_attempts: 3,

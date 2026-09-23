@@ -175,6 +175,19 @@ fn review_schema() -> String {
         "output_tokens": { "type": "integer" },
         "estimated_cost_usd": { "type": ["number", "null"] }
       }
+    },
+    "skills": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "version", "content_hash"],
+        "properties": {
+          "id": { "type": "string" },
+          "version": { "type": "string" },
+          "content_hash": { "type": "string" }
+        }
+      }
     }
   }
 }

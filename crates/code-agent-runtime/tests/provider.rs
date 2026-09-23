@@ -8,62 +8,60 @@ use agent_kernel::application::{ContextBlock, InstructionBlock};
 use agent_kernel::model::{
     CanonicalModelRequest, ModelAction, ModelError, ModelProvider, ToolDescription, UsageRecord,
 };
-use code_agent_runtime::provider::{OpenAiProvider, resolve_provider_route};
+use code_agent_runtime::provider::{
+    ApiStyle, OpenAiProvider, ProviderRoute, resolve_provider_route,
+};
 
 #[test]
 fn model_prefix_routing_normalizes_model_and_provider_defaults() {
-    let route = resolve_provider_route("ollama/llama3.2", None, Some("test-key"))
+    let route = resolve_provider_route("ollama/llama3.2", None)
         .expect("ollama prefix should route successfully");
     assert_eq!(route.model, "llama3.2");
-    assert_eq!(route.base_url, "http://127.0.0.1:11434/v1/chat/completions");
-    assert_eq!(route.api_key, "test-key");
+    assert_eq!(route.provider_root, "http://127.0.0.1:11434/v1");
+    assert_eq!(route.api_key, "ollama");
 }
 
 #[test]
 fn model_prefix_routing_accepts_openai_prefix() {
-    let route = resolve_provider_route("openai/gpt-4o", None, Some("test-key"))
+    let route = resolve_provider_route("openai/gpt-4o", Some("test-key"))
         .expect("openai prefix should route successfully");
     assert_eq!(route.model, "gpt-4o");
-    assert_eq!(route.base_url, "https://api.openai.com/v1/chat/completions");
+    assert_eq!(route.provider_root, "https://api.openai.com/v1");
     assert_eq!(route.api_key, "test-key");
 }
 
 #[test]
 fn model_prefix_routing_accepts_opencode_prefix() {
-    let route = resolve_provider_route("opencode/zen", None, Some("test-key"))
+    let route = resolve_provider_route("opencode/zen", Some("test-key"))
         .expect("opencode prefix should route successfully");
     assert_eq!(route.model, "zen");
-    assert_eq!(route.base_url, "https://api.opencode.ai/v1/chat/completions");
+    assert_eq!(route.provider_root, "https://opencode.ai/zen/v1");
     assert_eq!(route.api_key, "test-key");
 }
 
 #[test]
-fn model_prefix_routing_honors_explicit_overrides() {
-    let route = resolve_provider_route(
-        "github-copilot/gpt-4.1",
-        Some("http://127.0.0.1:9000/custom"),
-        Some("custom-key"),
-    )
-    .expect("copilot prefix should route successfully");
+fn model_prefix_routing_honors_explicit_api_key() {
+    let route = resolve_provider_route("github-copilot/gpt-4.1", Some("custom-key"))
+        .expect("copilot prefix should route successfully");
     assert_eq!(route.model, "gpt-4.1");
-    assert_eq!(route.base_url, "http://127.0.0.1:9000/custom");
+    assert_eq!(route.provider_root, "https://api.githubcopilot.com");
     assert_eq!(route.api_key, "custom-key");
 }
 
 #[test]
 fn model_prefix_routing_rejects_unknown_provider_prefixes() {
-    let error = resolve_provider_route("anthropic/claude", None, None)
+    let error = resolve_provider_route("anthropic/claude", None)
         .expect_err("unknown provider prefix must fail validation");
     assert!(error.contains("unsupported model provider prefix"));
 }
 
 #[test]
 fn model_prefix_routing_rejects_empty_provider_model_suffixes() {
-    let openai_error = resolve_provider_route("openai/", None, None)
+    let openai_error = resolve_provider_route("openai/", None)
         .expect_err("empty provider-qualified model suffix must fail validation");
     assert!(openai_error.contains("requires a non-empty model name"));
 
-    let anthropic_error = resolve_provider_route("anthropic/", None, None)
+    let anthropic_error = resolve_provider_route("anthropic/", None)
         .expect_err("empty provider-qualified model suffix must fail validation");
     assert!(anthropic_error.contains("requires a non-empty model name"));
 }
@@ -186,11 +184,12 @@ fn openai_provider_round_trips_canonical_request_and_tool_call() {
         history: vec![],
     };
 
-    let mut provider = OpenAiProvider::new(
-        format!("http://{address}/v1/chat/completions"),
-        "test-api-key",
-        "test-model",
-    );
+    let mut provider = OpenAiProvider::new(ProviderRoute {
+        provider_root: format!("http://{address}/v1/"),
+        api_key: "test-api-key".into(),
+        model: "test-model".into(),
+        api_style: ApiStyle::ChatCompletions,
+    });
     let response = provider
         .generate(&request)
         .expect("provider generate should succeed");
@@ -284,11 +283,12 @@ fn openai_provider_maps_http_failures_to_typed_model_errors() {
                 .expect("send provider error");
         });
 
-        let mut provider = OpenAiProvider::new(
-            format!("http://{address}/v1/chat/completions"),
-            "test-api-key",
-            "test-model",
-        );
+        let mut provider = OpenAiProvider::new(ProviderRoute {
+            provider_root: format!("http://{address}/v1/chat/completions"),
+            model: "test-model".into(),
+            api_key: "test-api-key".into(),
+            api_style: ApiStyle::ChatCompletions,
+        });
         let error = provider
             .generate(&request)
             .expect_err("HTTP provider failures must not become empty successful responses");
@@ -349,11 +349,12 @@ fn openai_provider_attaches_reported_usage_to_generated_response() {
         tools: vec![],
         history: vec![],
     };
-    let mut provider = OpenAiProvider::new(
-        format!("http://{address}/v1/chat/completions"),
-        "test-api-key",
-        "test-model",
-    );
+    let mut provider = OpenAiProvider::new(ProviderRoute {
+        provider_root: format!("http://{address}/v1/chat/completions"),
+        api_key: "test-api-key".into(),
+        model: "test-model".into(),
+        api_style: ApiStyle::ChatCompletions,
+    });
     // Exercise the adapter's provider-wire normalization directly as well as the
     // end-to-end generated response.  This keeps the test red even if the
     // response accessor is accidentally left disconnected from normalization.
@@ -491,11 +492,12 @@ mod coordinator_failure_tests {
                 .expect("send provider error");
         });
 
-        let provider = OpenAiProvider::new(
-            format!("http://{address}/v1/chat/completions"),
-            "test-api-key",
-            "test-model",
-        );
+        let provider = OpenAiProvider::new(ProviderRoute {
+            provider_root: format!("http://{address}/v1/"),
+            api_key: "test-api-key".into(),
+            model: "test-model".into(),
+            api_style: ApiStyle::ChatCompletions,
+        });
         let events = run_with_provider(provider);
         server.join().expect("provider server thread");
 
@@ -522,11 +524,12 @@ mod coordinator_failure_tests {
         let address = listener.local_addr().expect("provider address");
         drop(listener);
 
-        let provider = OpenAiProvider::new(
-            format!("http://{address}/v1/chat/completions"),
-            "test-api-key",
-            "test-model",
-        );
+        let provider = OpenAiProvider::new(ProviderRoute {
+            provider_root: format!("http://{address}/v1/chat/completions"),
+            api_key: "test-api-key".into(),
+            model: "test-model".into(),
+            api_style: ApiStyle::ChatCompletions,
+        });
         let events = run_with_provider(provider);
 
         assert!(
@@ -598,11 +601,12 @@ mod coordinator_failure_tests {
         });
         let saw_timeout = std::sync::Arc::new(std::sync::Mutex::new(false));
         let provider = RecordingProvider {
-            inner: OpenAiProvider::new(
-                format!("http://{address}/v1/chat/completions"),
-                "test-api-key",
-                "test-model",
-            ),
+            inner: OpenAiProvider::new(ProviderRoute {
+                provider_root: format!("http://{address}/v1"),
+                api_key: "test-api-key".into(),
+                model: "test-model".into(),
+                api_style: ApiStyle::ChatCompletions,
+            }),
             saw_timeout: std::sync::Arc::clone(&saw_timeout),
         };
         let events = run_with_provider(provider);
@@ -650,11 +654,12 @@ mod coordinator_failure_tests {
                 .expect("send provider rate limit");
         });
 
-        let provider = OpenAiProvider::new(
-            format!("http://{address}/v1/chat/completions"),
-            "test-api-key",
-            "test-model",
-        );
+        let provider = OpenAiProvider::new(ProviderRoute {
+            provider_root: format!("http://{address}/v1/"),
+            api_key: "test-api-key".into(),
+            model: "test-model".into(),
+            api_style: ApiStyle::ChatCompletions,
+        });
         let events = run_with_provider(provider);
         server.join().expect("provider server thread");
 
@@ -702,11 +707,12 @@ fn openai_provider_parses_object_shaped_tool_call_arguments() {
         tools: vec![],
         history: vec![],
     };
-    let mut provider = OpenAiProvider::new(
-        format!("http://{address}/v1/chat/completions"),
-        "test-api-key",
-        "test-model",
-    );
+    let mut provider = OpenAiProvider::new(ProviderRoute {
+        provider_root: format!("http://{address}/v1/"),
+        api_key: "test-api-key".into(),
+        model: "test-model".into(),
+        api_style: ApiStyle::ChatCompletions,
+    });
     let response = provider
         .generate(&request)
         .expect("generate should succeed");
@@ -758,11 +764,12 @@ fn openai_provider_rejects_non_object_string_tool_arguments() {
         tools: vec![],
         history: vec![],
     };
-    let mut provider = OpenAiProvider::new(
-        format!("http://{address}/v1/chat/completions"),
-        "test-api-key",
-        "test-model",
-    );
+    let mut provider = OpenAiProvider::new(ProviderRoute {
+        provider_root: format!("http://{address}/v1/"),
+        api_key: "test-api-key".into(),
+        model: "test-model".into(),
+        api_style: ApiStyle::ChatCompletions,
+    });
     let response = provider
         .generate(&request)
         .expect("generate should succeed");
@@ -805,11 +812,12 @@ fn openai_provider_parses_content_completion_into_completion_request() {
         tools: vec![],
         history: vec![],
     };
-    let mut provider = OpenAiProvider::new(
-        format!("http://{address}/v1/chat/completions"),
-        "test-api-key",
-        "test-model",
-    );
+    let mut provider = OpenAiProvider::new(ProviderRoute {
+        provider_root: format!("http://{address}/v1/"),
+        api_key: "test-api-key".into(),
+        model: "test-model".into(),
+        api_style: ApiStyle::ChatCompletions,
+    });
     let response = provider
         .generate(&request)
         .expect("generate should succeed");

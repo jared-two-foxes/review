@@ -10,7 +10,7 @@ use agent_protocol::{Clock, IdGenerator, RandomIdGenerator, SystemClock};
 use code_agent_runtime::capabilities::{CodeToolCatalog, ScopedWrite};
 use code_agent_runtime::guidance::{GuidanceDocument, GuidanceKind, collect_guidance_documents};
 use code_agent_runtime::identity::content_id_for_bytes;
-use code_agent_runtime::provider::{OpenAiProvider, resolve_provider_route};
+use code_agent_runtime::provider::{OpenAiProvider, resolve_provider_route_with_root};
 use code_agent_runtime::repo::GitRepo;
 use code_agent_runtime::security::SecurityPolicy;
 use code_agent_runtime::target::ReviewTarget;
@@ -25,7 +25,7 @@ use std::time::Duration;
 pub struct ImplementConfig {
     pub api_key: Option<String>,
     pub model: String,
-    pub base_url: Option<String>,
+    pub provider_root: Option<String>,
     pub max_turns: u32,
     pub max_tool_calls: u32,
     pub max_completion_attempts: u32,
@@ -41,7 +41,7 @@ impl Default for ImplementConfig {
         Self {
             api_key: None,
             model: "opencode/gpt-5.6-terra".to_string(),
-            base_url: None,
+            provider_root: None,
             max_turns: 10,
             max_tool_calls: 10,
             max_completion_attempts: 3,
@@ -59,15 +59,15 @@ pub fn run_implement(
     config: &ImplementConfig,
     cancel: Option<&AtomicBool>,
 ) -> Result<(ImplementResult, Vec<LedgerEvent>), String> {
-    let route = resolve_provider_route(
+    let route = resolve_provider_route_with_root(
         config.model.as_str(),
-        config.base_url.as_deref(),
         config.api_key.as_deref(),
+        config.provider_root.as_deref(),
     )?;
     if route.api_key.is_empty() {
         return Err("missing API key".into());
     }
-    let provider = OpenAiProvider::new(route.base_url, route.api_key, route.model);
+    let provider = OpenAiProvider::new(route);
     run_implement_with_provider(request, config, provider, cancel)
 }
 

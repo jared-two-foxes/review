@@ -9,9 +9,9 @@ use agent_kernel::{
 };
 use agent_protocol::{FixedClock, RandomIdGenerator, SequenceIdGenerator, SystemClock};
 use review_app::{
-    ReadChangeTool, ReviewApplication, ReviewConfig, run_review as run_composed_review,
-    run_review_with_provider,
+    ReadChangeTool, ReviewApplication, ReviewConfig, run_review_with_provider,
 };
+use code_agent_runtime::provider::{ApiStyle, OpenAiProvider, ProviderRoute};
 use review_protocol::{ReviewRequest, ReviewResult, ReviewStatus};
 use serde_json::json;
 use std::io::{Read, Write};
@@ -593,7 +593,13 @@ fn requirements_orientation_is_framed_as_data_for_analysis() {
         }
     });
 
-    let (result, _events, error) = run_composed_review(
+    let provider = OpenAiProvider::new(ProviderRoute {
+        model: "test-model".into(),
+        provider_root: format!("http://{address}/v1"),
+        api_key: "test-key".into(),
+        api_style: ApiStyle::ChatCompletions,
+    });
+    let (result, _events) = run_review_with_provider(
         &ReviewRequest {
             schema: "review.request/v1".into(),
             repository_path: root.to_string_lossy().into_owned(),
@@ -602,9 +608,8 @@ fn requirements_orientation_is_framed_as_data_for_analysis() {
             requirements: Some(requirements_path.to_string_lossy().into_owned()),
         },
         &ReviewConfig {
-            api_key: "test-key".into(),
-            model: "test-model".into(),
-            base_url: format!("http://{}", address),
+            model: "openai/test-model".into(),
+            provider_root: None,
             max_turns: 10,
             max_tool_calls: 10,
             max_completion_attempts: 10,
@@ -614,11 +619,12 @@ fn requirements_orientation_is_framed_as_data_for_analysis() {
             max_input_tokens: None,
             max_cost_usd: None,
         },
+        provider,
         None,
-    );
+    )
+    .expect("review must reach the model");
     server.join().expect("model server");
 
-    assert!(error.is_none(), "review must reach the model: {:?}", error);
     assert!(matches!(result.status, ReviewStatus::Approved));
     let captured = requests.lock().expect("capture lock");
     assert_eq!(captured.len(), 4);

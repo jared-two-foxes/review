@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use agent_kernel::application::{ContextBlock, InstructionBlock};
 use agent_kernel::model::{CanonicalModelRequest, ModelError, ModelProvider};
-use code_agent_runtime::provider::OpenAiProvider;
+use code_agent_runtime::provider::{ApiStyle, OpenAiProvider, ProviderRoute};
 
 #[test]
 fn openai_provider_aborts_generation_at_caller_deadline() {
@@ -43,11 +43,12 @@ fn openai_provider_aborts_generation_at_caller_deadline() {
         tools: vec![],
         history: vec![],
     };
-    let mut provider = OpenAiProvider::new(
-        format!("http://{address}/v1/chat/completions"),
-        "test-api-key",
-        "test-model",
-    );
+    let mut provider = OpenAiProvider::new(ProviderRoute {
+        provider_root: format!("http://{address}/v1/chat/completions"),
+        api_key: "test-api-key".into(),
+        model: "test-model".into(),
+        api_style: ApiStyle::ChatCompletions,
+    });
 
     let deadline = Instant::now() + Duration::from_millis(50);
     let error = provider

@@ -17,7 +17,7 @@ use agent_protocol::{Clock, IdGenerator, RandomIdGenerator, SystemClock};
 use code_agent_runtime::{
     capabilities::{CodeToolCatalog, ReadOnly},
     guidance::{GuidanceDocument, GuidanceKind, collect_guidance_documents},
-    provider::OpenAiProvider,
+    provider::{OpenAiProvider, resolve_provider_route_with_root},
     repo::GitRepo,
     security::SecurityPolicy,
     target::ReviewTarget,
@@ -37,9 +37,8 @@ use std::time::Duration;
 const LARGE_CHANGE_THRESHOLD: usize = 20;
 
 pub struct ReviewConfig {
-    pub api_key: String,
     pub model: String,
-    pub base_url: String,
+    pub provider_root: Option<String>,
     pub max_turns: u32,
     pub max_tool_calls: u32,
     pub max_completion_attempts: u32,
@@ -68,9 +67,8 @@ fn project_guidance_context_block(document: &GuidanceDocument) -> ContextBlock {
 impl Default for ReviewConfig {
     fn default() -> Self {
         Self {
-            api_key: String::new(),
             model: "opencode/gpt-5.6-terra".to_string(),
-            base_url: "https://api.openai.com/v1".to_string(),
+            provider_root: None,
             max_turns: 10,
             max_tool_calls: 10,
             max_completion_attempts: 3,
@@ -213,14 +211,15 @@ fn compose_and_run(
     config: &ReviewConfig,
     cancel: Option<&AtomicBool>,
 ) -> Result<(ReviewResult, Vec<LedgerEvent>), String> {
-    if config.api_key.is_empty() {
-        return Err("missing API key".into());
-    }
-    let provider = OpenAiProvider::new(
-        config.base_url.as_str(),
-        config.api_key.as_str(),
+    let route = match resolve_provider_route_with_root(
         config.model.as_str(),
-    );
+        None,
+        config.provider_root.as_deref(),
+    ) {
+        Ok(route) => route,
+        Err(error) => return Err(format!("invalid model: {error}")),
+    };
+    let provider = OpenAiProvider::new(route);
     run_review_with_provider(request, config, provider, cancel)
 }
 

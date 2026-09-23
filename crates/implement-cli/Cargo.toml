@@ -7,6 +7,7 @@ edition = "2024"
 clap = { version = "4.5", features = ["string"] }
 cli-common = { version = "0.1.0", path = "../cli-common" }
 implement-app = { version = "0.1.0", path = "../implement-app" }
+code-agent-runtime = { version = "0.1.0", path = "../code-agent-runtime" }
 serde = { version = "1", features = ["derive"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 ctrlc = "3"

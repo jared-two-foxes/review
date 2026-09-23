@@ -3,9 +3,7 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use agent_kernel::application::InstructionBlock;
-use agent_kernel::model::{CanonicalModelRequest, ModelProvider};
-use code_agent_runtime::provider::OpenAiProvider;
+use code_agent_runtime::provider::{ApiStyle, OpenAiProvider, ProviderRoute};
 use tracing_subscriber::fmt::MakeWriter;
 
 struct TraceContentEnvironmentRestore(Option<String>);
@@ -70,18 +68,33 @@ fn openai_provider_configures_content_tracing_from_environment() {
     unsafe {
         std::env::remove_var("REVIEW_TRACE_CONTENT");
     }
-    let unset_provider = OpenAiProvider::new("http://localhost", "test-key", "test-model");
+    let unset_provider = OpenAiProvider::new(ProviderRoute {
+        provider_root: "http://localhost".into(),
+        api_key: "test-key".into(),
+        model: "test-model".into(),
+        api_style: ApiStyle::ChatCompletions,
+    });
     assert!(!unset_provider.trace_content);
 
     unsafe {
         std::env::set_var("REVIEW_TRACE_CONTENT", "");
     }
-    let empty_provider = OpenAiProvider::new("http://localhost", "test-key", "test-model");
+    let empty_provider = OpenAiProvider::new(ProviderRoute {
+        provider_root: "http://localhost".into(),
+        api_key: "test-key".into(),
+        model: "test-model".into(),
+        api_style: ApiStyle::ChatCompletions,
+    });
     assert!(!empty_provider.trace_content);
 
     unsafe {
         std::env::set_var("REVIEW_TRACE_CONTENT", "enabled");
     }
-    let opted_in_provider = OpenAiProvider::new("http://localhost", "test-key", "test-model");
+    let opted_in_provider = OpenAiProvider::new(ProviderRoute {
+        provider_root: "http://localhost".into(),
+        api_key: "test-key".into(),
+        model: "test-model".into(),
+        api_style: ApiStyle::ChatCompletions,
+    });
     assert!(opted_in_provider.trace_content);
 }

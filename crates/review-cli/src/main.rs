@@ -1,5 +1,5 @@
 use clap::{Arg, ArgAction, Command};
-use code_agent_runtime::provider::resolve_provider_route;
+use code_agent_runtime::provider::resolve_provider_route_with_root;
 use review_app::ReviewConfig;
 use review_protocol::{ReviewRequest, ReviewStatus};
 use std::path::Path;
@@ -15,7 +15,7 @@ fn main() {
 
     let mut request_path: Option<String> = None;
     let mut model: String = "opencode/gpt-5.6-terra".into();
-    let mut base_url: Option<String> = None;
+    let mut provider_root: Option<String> = None;
     let mut max_turns: u32 = 10;
     let mut wall_clock_budget_secs: u64 = 60;
     let mut max_input_tokens: Option<u64> = None;
@@ -59,7 +59,7 @@ fn main() {
                 i += 1;
             }
             "--base-url" => {
-                base_url = Some(flag_value(&args, i, "--base-url"));
+                provider_root = Some(flag_value(&args, i, "--base-url"));
                 i += 1;
             }
             "--max-turns" => {
@@ -178,14 +178,13 @@ fn main() {
     })
     .expect("set Ctrl-C handler");
 
-    let route = match resolve_provider_route(&model, base_url.as_deref(), None) {
-        Ok(route) => route,
-        Err(message) => emit_error("INVALID_ARGUMENTS", &message),
-    };
+    if let Err(error) = resolve_provider_route_with_root(&model, None, provider_root.as_deref()) {
+        emit_error("INVALID_ARGUMENTS", &error);
+    }
+
     let config = ReviewConfig {
-        model: route.model,
-        base_url: route.base_url,
-        api_key: route.api_key,
+        model,
+        provider_root,
         max_turns,
         max_tool_calls: 40,
         max_completion_attempts: 3,

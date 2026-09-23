@@ -6,9 +6,9 @@ edition = "2024"
 [dependencies]
 clap = { version = "4.5", features = ["string"] }
 cli-common = { version = "0.1.0", path = "../cli-common" }
+code-agent-runtime = { version = "0.1.0", path = "../code-agent-runtime" }
 review-protocol = { version = "0.1.0", path = "../review-protocol" }
 review-app = { version = "0.1.0", path = "../review-app" }
-code-agent-runtime = { version = "0.1.0", path = "../code-agent-runtime" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 ctrlc = "3"

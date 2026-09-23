@@ -6,17 +6,50 @@ use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use tracing;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiStyle {
+    ChatCompletions,
+    Responses,
+}
+
+impl ApiStyle {
+    fn endpoint_suffix(&self) -> &'static str {
+        match self {
+            ApiStyle::ChatCompletions => "chat/completions",
+            ApiStyle::Responses => "responses",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderRoute {
     pub model: String,
-    pub base_url: String,
+    pub provider_root: String,
     pub api_key: String,
+    pub api_style: ApiStyle,
+}
+
+fn resolve_api_style(provider: &str, model: &str) -> ApiStyle {
+    match (provider, model) {
+        ("openai", _) => ApiStyle::ChatCompletions,
+        ("ollama", _) => ApiStyle::Responses,
+        ("opencode", _) => ApiStyle::ChatCompletions,
+        ("copilot", _) | ("github-copilot", _) => ApiStyle::Responses,
+        _ => ApiStyle::ChatCompletions, // default
+    }
 }
 
 pub fn resolve_provider_route(
     model: &str,
-    explicit_base_url: Option<&str>,
     explicit_api_key: Option<&str>,
+) -> Result<ProviderRoute, String> {
+    resolve_provider_route_with_root(model, explicit_api_key, None)
+}
+
+pub fn resolve_provider_route_with_root(
+    model: &str,
+    explicit_api_key: Option<&str>,
+    explicit_provider_root: Option<&str>,
 ) -> Result<ProviderRoute, String> {
     let parsed = model
         .split_once('/')
@@ -31,19 +64,19 @@ pub fn resolve_provider_route(
         }
         let (default_base_url, default_api_key) = match provider.as_str() {
             "openai" => (
-                "https://api.openai.com/v1/chat/completions",
+                "https://api.openai.com/v1",
                 std::env::var("OPENAI_API_KEY").unwrap_or_default(),
             ),
             "ollama" => (
-                "http://127.0.0.1:11434/v1/chat/completions",
+                "http://127.0.0.1:11434/v1",
                 std::env::var("OLLAMA_API_KEY").unwrap_or_else(|_| "ollama".into()),
             ),
             "opencode" => (
-                "https://opencode.ai/zen/v1/chat/completions",
+                "https://opencode.ai/zen/v1",
                 std::env::var("OPENCODE_API_KEY").unwrap_or_default(),
             ),
             "copilot" | "github-copilot" => (
-                "https://api.githubcopilot.com/chat/completions",
+                "https://api.githubcopilot.com",
                 std::env::var("GITHUB_TOKEN")
                     .or_else(|_| std::env::var("GITHUB_COPILOT_API_KEY"))
                     .unwrap_or_default(),
@@ -56,24 +89,37 @@ pub fn resolve_provider_route(
             }
         };
 
+        let api_style = resolve_api_style(provider.as_str(), provider_model);
+
         return Ok(ProviderRoute {
             model: provider_model.to_string(),
-            base_url: explicit_base_url.unwrap_or(default_base_url).to_string(),
+            provider_root: explicit_provider_root
+                .unwrap_or(default_base_url)
+                .trim_end_matches('/')
+                .to_string(),
             api_key: explicit_api_key
                 .unwrap_or(default_api_key.as_str())
                 .to_string(),
+            api_style,
         });
     }
 
-    let default_base_url = "https://api.openai.com/v1/chat/completions";
-    let default_api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
-    Ok(ProviderRoute {
-        model: model.to_string(),
-        base_url: explicit_base_url.unwrap_or(default_base_url).to_string(),
-        api_key: explicit_api_key
-            .unwrap_or(default_api_key.as_str())
-            .to_string(),
-    })
+    if let Some(provider_root) = explicit_provider_root {
+        return Ok(ProviderRoute {
+            model: model.to_string(),
+            provider_root: provider_root.trim_end_matches('/').to_string(),
+            api_key: explicit_api_key
+                .map(str::to_string)
+                .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+                .unwrap_or_default(),
+            api_style: ApiStyle::ChatCompletions,
+        });
+    }
+
+    Err(format!(
+        "model name '{}' does not contain a provider prefix; expected format is <provider>/<model>",
+        model
+    ))
 }
 
 fn parse_content_completion(content: &str) -> Option<Value> {
@@ -122,19 +168,16 @@ fn parse_content_completion(content: &str) -> Option<Value> {
 /// format and parses responses back into canonical model actions. All
 /// provider-specific wire types stay private to this module.
 pub struct OpenAiProvider {
-    pub base_url: String,
+    pub provider_root: String,
     pub api_key: String,
     pub model: String,
+    pub api_style: ApiStyle,
     pub trace_content: bool,
     client: reqwest::blocking::Client,
 }
 
 impl OpenAiProvider {
-    pub fn new(
-        base_url: impl Into<String>,
-        api_key: impl Into<String>,
-        model: impl Into<String>,
-    ) -> Self {
+    pub fn new(route: ProviderRoute) -> Self {
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
@@ -143,9 +186,10 @@ impl OpenAiProvider {
             .map(|v| !v.is_empty())
             .unwrap_or(false);
         Self {
-            base_url: base_url.into(),
-            api_key: api_key.into(),
-            model: model.into(),
+            provider_root: route.provider_root,
+            api_key: route.api_key,
+            model: route.model,
+            api_style: route.api_style,
             trace_content,
             client,
         }
@@ -354,9 +398,14 @@ impl OpenAiProvider {
         body: &str,
         timeout: Option<Duration>,
     ) -> Result<reqwest::blocking::Response, reqwest::Error> {
+        let url = format!(
+            "{}/{}",
+            self.provider_root,
+            self.api_style.endpoint_suffix()
+        );
         let mut req = self
             .client
-            .post(&self.base_url)
+            .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .body(body.to_string());
