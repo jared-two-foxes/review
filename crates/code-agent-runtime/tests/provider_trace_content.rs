@@ -70,6 +70,7 @@ fn openai_provider_configures_content_tracing_from_environment() {
     }
     let unset_provider = OpenAiProvider::new(ProviderRoute {
         provider_root: "http://localhost".into(),
+        provider: "openai".into(),
         api_key: "test-key".into(),
         model: "test-model".into(),
         api_style: ApiStyle::ChatCompletions,
@@ -81,6 +82,7 @@ fn openai_provider_configures_content_tracing_from_environment() {
     }
     let empty_provider = OpenAiProvider::new(ProviderRoute {
         provider_root: "http://localhost".into(),
+        provider: "openai".into(),
         api_key: "test-key".into(),
         model: "test-model".into(),
         api_style: ApiStyle::ChatCompletions,
@@ -92,6 +94,7 @@ fn openai_provider_configures_content_tracing_from_environment() {
     }
     let opted_in_provider = OpenAiProvider::new(ProviderRoute {
         provider_root: "http://localhost".into(),
+        provider: "openai".into(),
         api_key: "test-key".into(),
         model: "test-model".into(),
         api_style: ApiStyle::ChatCompletions,

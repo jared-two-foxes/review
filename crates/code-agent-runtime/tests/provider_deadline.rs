@@ -45,6 +45,7 @@ fn openai_provider_aborts_generation_at_caller_deadline() {
     };
     let mut provider = OpenAiProvider::new(ProviderRoute {
         provider_root: format!("http://{address}/v1/chat/completions"),
+        provider: "openai".into(),
         api_key: "test-api-key".into(),
         model: "test-model".into(),
         api_style: ApiStyle::ChatCompletions,

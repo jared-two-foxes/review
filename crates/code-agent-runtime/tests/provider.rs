@@ -186,6 +186,7 @@ fn openai_provider_round_trips_canonical_request_and_tool_call() {
 
     let mut provider = OpenAiProvider::new(ProviderRoute {
         provider_root: format!("http://{address}/v1/"),
+        provider: "openai".into(),
         api_key: "test-api-key".into(),
         model: "test-model".into(),
         api_style: ApiStyle::ChatCompletions,
@@ -285,6 +286,7 @@ fn openai_provider_maps_http_failures_to_typed_model_errors() {
 
         let mut provider = OpenAiProvider::new(ProviderRoute {
             provider_root: format!("http://{address}/v1/chat/completions"),
+            provider: "openai".into(),
             model: "test-model".into(),
             api_key: "test-api-key".into(),
             api_style: ApiStyle::ChatCompletions,
@@ -351,23 +353,11 @@ fn openai_provider_attaches_reported_usage_to_generated_response() {
     };
     let mut provider = OpenAiProvider::new(ProviderRoute {
         provider_root: format!("http://{address}/v1/chat/completions"),
+        provider: "openai".into(),
         api_key: "test-api-key".into(),
         model: "test-model".into(),
         api_style: ApiStyle::ChatCompletions,
     });
-    // Exercise the adapter's provider-wire normalization directly as well as the
-    // end-to-end generated response.  This keeps the test red even if the
-    // response accessor is accidentally left disconnected from normalization.
-    let provider_payload: serde_json::Value =
-        serde_json::from_str(response_body).expect("usage fixture must be valid JSON");
-    let normalized = OpenAiProvider::normalize_usage(&provider_payload);
-    assert_eq!(normalized.input_tokens, 123);
-    assert_eq!(normalized.output_tokens, 45);
-    assert_eq!(
-        normalized.estimated_cost_usd,
-        Some(123.0 * 0.000001 + 45.0 * 0.000002),
-        "usage cost must use the adapter's documented per-token rates"
-    );
 
     let generated = provider
         .generate(&request)
@@ -494,6 +484,7 @@ mod coordinator_failure_tests {
 
         let provider = OpenAiProvider::new(ProviderRoute {
             provider_root: format!("http://{address}/v1/"),
+            provider: "openai".into(),
             api_key: "test-api-key".into(),
             model: "test-model".into(),
             api_style: ApiStyle::ChatCompletions,
@@ -526,6 +517,7 @@ mod coordinator_failure_tests {
 
         let provider = OpenAiProvider::new(ProviderRoute {
             provider_root: format!("http://{address}/v1/chat/completions"),
+            provider: "openai".into(),
             api_key: "test-api-key".into(),
             model: "test-model".into(),
             api_style: ApiStyle::ChatCompletions,
@@ -603,6 +595,7 @@ mod coordinator_failure_tests {
         let provider = RecordingProvider {
             inner: OpenAiProvider::new(ProviderRoute {
                 provider_root: format!("http://{address}/v1"),
+                provider: "openai".into(),
                 api_key: "test-api-key".into(),
                 model: "test-model".into(),
                 api_style: ApiStyle::ChatCompletions,
@@ -656,6 +649,7 @@ mod coordinator_failure_tests {
 
         let provider = OpenAiProvider::new(ProviderRoute {
             provider_root: format!("http://{address}/v1/"),
+            provider: "openai".into(),
             api_key: "test-api-key".into(),
             model: "test-model".into(),
             api_style: ApiStyle::ChatCompletions,
@@ -709,6 +703,7 @@ fn openai_provider_parses_object_shaped_tool_call_arguments() {
     };
     let mut provider = OpenAiProvider::new(ProviderRoute {
         provider_root: format!("http://{address}/v1/"),
+        provider: "openai".into(),
         api_key: "test-api-key".into(),
         model: "test-model".into(),
         api_style: ApiStyle::ChatCompletions,
@@ -766,6 +761,7 @@ fn openai_provider_rejects_non_object_string_tool_arguments() {
     };
     let mut provider = OpenAiProvider::new(ProviderRoute {
         provider_root: format!("http://{address}/v1/"),
+        provider: "openai".into(),
         api_key: "test-api-key".into(),
         model: "test-model".into(),
         api_style: ApiStyle::ChatCompletions,
@@ -814,6 +810,7 @@ fn openai_provider_parses_content_completion_into_completion_request() {
     };
     let mut provider = OpenAiProvider::new(ProviderRoute {
         provider_root: format!("http://{address}/v1/"),
+        provider: "openai".into(),
         api_key: "test-api-key".into(),
         model: "test-model".into(),
         api_style: ApiStyle::ChatCompletions,

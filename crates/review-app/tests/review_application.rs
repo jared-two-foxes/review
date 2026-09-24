@@ -8,10 +8,8 @@ use agent_kernel::{
     tools::ToolCatalog,
 };
 use agent_protocol::{FixedClock, RandomIdGenerator, SequenceIdGenerator, SystemClock};
-use review_app::{
-    ReadChangeTool, ReviewApplication, ReviewConfig, run_review_with_provider,
-};
 use code_agent_runtime::provider::{ApiStyle, OpenAiProvider, ProviderRoute};
+use review_app::{ReadChangeTool, ReviewApplication, ReviewConfig, run_review_with_provider};
 use review_protocol::{ReviewRequest, ReviewResult, ReviewStatus};
 use serde_json::json;
 use std::io::{Read, Write};
@@ -596,6 +594,7 @@ fn requirements_orientation_is_framed_as_data_for_analysis() {
     let provider = OpenAiProvider::new(ProviderRoute {
         model: "test-model".into(),
         provider_root: format!("http://{address}/v1"),
+        provider: "openai".into(),
         api_key: "test-key".into(),
         api_style: ApiStyle::ChatCompletions,
     });

@@ -1,10 +1,10 @@
-use code_agent_runtime::diff::{changed_files, read_diff, FileStatus};
+use code_agent_runtime::diff::{FileStatus, changed_files, read_diff};
 use code_agent_runtime::error::RepoError;
 use code_agent_runtime::repo::GitRepo;
 use code_agent_runtime::snapshot::{resolve_targets, snapshot_id};
 use code_agent_runtime::target::ReviewTarget;
 use git2::Oid;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::process::Command;
 use tempfile::TempDir;
 
@@ -156,13 +156,17 @@ fn changed_files_enumerates_status() {
     let changes = changed_files(&repo, &base, &head).unwrap();
 
     // src/new.rs was added
-    assert!(changes
-        .iter()
-        .any(|c| c.path == "src/new.rs" && c.status == FileStatus::Added));
+    assert!(
+        changes
+            .iter()
+            .any(|c| c.path == "src/new.rs" && c.status == FileStatus::Added)
+    );
     // src/main.rs was modified
-    assert!(changes
-        .iter()
-        .any(|c| c.path == "src/main.rs" && c.status == FileStatus::Modified));
+    assert!(
+        changes
+            .iter()
+            .any(|c| c.path == "src/main.rs" && c.status == FileStatus::Modified)
+    );
 }
 
 fn make_test_repo_with_all_change_kinds() -> TempDir {
@@ -232,18 +236,26 @@ fn changed_files_reports_added_modified_deleted_and_renamed_paths() {
     let changes = changed_files(&repo, &base, &head).unwrap();
 
     assert_eq!(changes.len(), 4);
-    assert!(changes
-        .iter()
-        .any(|change| { change.path == "added.txt" && change.status == FileStatus::Added }));
-    assert!(changes
-        .iter()
-        .any(|change| { change.path == "src/main.rs" && change.status == FileStatus::Modified }));
-    assert!(changes
-        .iter()
-        .any(|change| { change.path == "delete_me.txt" && change.status == FileStatus::Deleted }));
-    assert!(changes
-        .iter()
-        .any(|change| { change.path == "renamed.txt" && change.status == FileStatus::Renamed }));
+    assert!(
+        changes
+            .iter()
+            .any(|change| { change.path == "added.txt" && change.status == FileStatus::Added })
+    );
+    assert!(
+        changes.iter().any(|change| {
+            change.path == "src/main.rs" && change.status == FileStatus::Modified
+        })
+    );
+    assert!(
+        changes.iter().any(|change| {
+            change.path == "delete_me.txt" && change.status == FileStatus::Deleted
+        })
+    );
+    assert!(
+        changes
+            .iter()
+            .any(|change| { change.path == "renamed.txt" && change.status == FileStatus::Renamed })
+    );
 }
 
 #[test]
@@ -255,9 +267,11 @@ fn reverse_workdir_diff_reports_untracked_base_files_as_deleted() {
     let (base, head) = resolve_targets(&repo, ":working", "HEAD").unwrap();
     let changes = changed_files(&repo, &base, &head).unwrap();
 
-    assert!(changes
-        .iter()
-        .any(|change| change.path == "worktree_only.txt" && change.status == FileStatus::Deleted));
+    assert!(
+        changes.iter().any(
+            |change| change.path == "worktree_only.txt" && change.status == FileStatus::Deleted
+        )
+    );
 }
 
 #[test]
@@ -274,9 +288,11 @@ fn reverse_index_diff_reports_staged_base_files_as_deleted() {
     let (base, head) = resolve_targets(&repo, ":staged", "HEAD").unwrap();
     let changes = changed_files(&repo, &base, &head).unwrap();
 
-    assert!(changes
-        .iter()
-        .any(|change| change.path == "staged_only.txt" && change.status == FileStatus::Deleted));
+    assert!(
+        changes
+            .iter()
+            .any(|change| change.path == "staged_only.txt" && change.status == FileStatus::Deleted)
+    );
 }
 
 #[test]
