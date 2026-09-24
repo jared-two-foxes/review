@@ -219,6 +219,12 @@ fn compose_and_run(
         Ok(route) => route,
         Err(error) => return Err(format!("invalid model: {error}")),
     };
+    if route.api_key.is_empty() {
+        return Err(format!(
+            "no API key configured for provider {}",
+            route.provider
+        ));
+    }
     let provider = OpenAiProvider::new(route);
     run_review_with_provider(request, config, provider, cancel)
 }

@@ -31,6 +31,7 @@ trait RequestAuth: Send + Sync {
     fn amend(
         &mut self,
         req: reqwest::blocking::RequestBuilder,
+        deadline: Option<Instant>,
     ) -> Result<reqwest::blocking::RequestBuilder, AuthError>;
 }
 
@@ -42,6 +43,7 @@ impl RequestAuth for BearerAuth {
     fn amend(
         &mut self,
         req: reqwest::blocking::RequestBuilder,
+        _deadline: Option<Instant>,
     ) -> Result<reqwest::blocking::RequestBuilder, AuthError> {
         Ok(req.header("Authorization", format!("Bearer {}", self.token)))
     }
@@ -67,20 +69,27 @@ impl CopilotAuth {
         }
     }
 
-    fn ensure_valid_token(&mut self) -> Result<&str, AuthError> {
+    fn ensure_valid_token(&mut self, deadline: Option<Instant>) -> Result<&str, AuthError> {
         let needs_refresh = match &self.cached_token {
             Some(cached) => cached.expires_at <= Instant::now(),
             None => true,
         };
 
         if needs_refresh {
-            // Exchange (or re-exchange) the GitHub token for a Copilot token.
-            let resp = self
+            let exchange_timeout = deadline.and_then(|d| d.checked_duration_since(Instant::now()));
+
+            let mut request = self
                 .client
-                .get("https://auth.github.com/copilot_internal/v2/token")
+                .get("https://api.github.com/copilot_internal/v2/token")
                 .header("Authorization", format!("Token {}", self.github_token))
                 .header("User-Agent", "GitHubCopilotChat/0.35.0")
-                .header("Editor-Version", "vscode/1.107.0")
+                .header("Editor-Version", "vscode/1.107.0");
+            if let Some(timeout) = exchange_timeout {
+                request = request.timeout(timeout);
+            }
+
+            // Exchange (or re-exchange) the GitHub token for a Copilot token.
+            let resp = request
                 .send()
                 .map_err(|e| AuthError::ExchangeFailed(e.to_string()))?;
 
@@ -93,9 +102,12 @@ impl CopilotAuth {
             let expires_in = body["expires_in"]
                 .as_u64()
                 .ok_or(AuthError::ExchangeFailed("Missing expires_in".into()))?;
+            let expiry = Instant::now()
+                .checked_add(Duration::from_secs(expires_in))
+                .ok_or_else(|| AuthError::ExchangeFailed("token expiry overflow".into()))?;
             self.cached_token = Some(CopilotToken {
                 token: token.to_string(),
-                expires_at: Instant::now() + Duration::from_secs(expires_in),
+                expires_at: expiry,
             });
         }
 
@@ -107,8 +119,9 @@ impl RequestAuth for CopilotAuth {
     fn amend(
         &mut self,
         req: reqwest::blocking::RequestBuilder,
+        deadline: Option<Instant>,
     ) -> Result<reqwest::blocking::RequestBuilder, AuthError> {
-        let token = self.ensure_valid_token()?;
+        let token = self.ensure_valid_token(deadline)?;
         Ok(req
             .header("Authorization", format!("Bearer {}", token))
             .header("Copilot-Integration-Id", "vscode-chat")
@@ -167,7 +180,7 @@ fn resolve_api_style(provider: &str, model: &str) -> ApiStyle {
             if model.starts_with("gpt-5")
                 || model.starts_with("gpt-6")
                 || model.starts_with("grok")
-                || model.starts_with("mus-spark")
+                || model.starts_with("muse-spark")
             {
                 ApiStyle::Responses
             } else {
@@ -264,10 +277,17 @@ pub fn resolve_provider_route_with_root(
         });
     }
 
-    Err(format!(
-        "model name '{}' does not contain a provider prefix; expected format is <provider>/<model>",
-        model
-    ))
+    // Fallback: unprefixed model names default to the OpenAI provider.
+    let default_api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
+    Ok(ProviderRoute {
+        model: model.to_string(),
+        provider_root: "https://api.openai.com/v1".to_string(),
+        provider: "openai".to_string(),
+        api_key: explicit_api_key
+            .map(str::to_string)
+            .unwrap_or(default_api_key),
+        api_style: ApiStyle::ChatCompletions,
+    })
 }
 
 fn parse_content_completion(content: &str) -> Option<Value> {
@@ -619,7 +639,6 @@ pub struct OpenAiProvider {
     pub model: String,
     wire_format: Box<dyn WireFormat>,
     auth: Box<dyn RequestAuth>,
-    pub trace_content: bool,
     client: reqwest::blocking::Client,
 }
 
@@ -638,15 +657,12 @@ impl OpenAiProvider {
             .expect("Failed to build HTTP client");
         let wire_format = wire_format_for(route.api_style);
         let auth = auth_for(&route.provider, route.api_key, client.clone());
-        let trace_content = std::env::var("REVIEW_TRACE_CONTENT")
-            .map(|v| !v.is_empty())
-            .unwrap_or(false);
+
         Self {
             provider_root: route.provider_root,
             auth,
             model: route.model,
             wire_format,
-            trace_content,
             client,
         }
     }
@@ -714,9 +730,10 @@ impl OpenAiProvider {
             .post(&url)
             .header("Content-Type", "application/json")
             .body(body.to_string());
-        req = self
+        let deadline = timeout.map(|d| Instant::now() + d);
+        let mut req = self
             .auth
-            .amend(req)
+            .amend(req, deadline)
             .map_err(|e| ModelError::ApiError(e.to_string()))?;
         if let Some(t) = timeout {
             req = req.timeout(t);
