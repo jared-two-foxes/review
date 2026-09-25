@@ -575,6 +575,27 @@ impl AgentApplication for ReviewApplication {
             }
         }
 
+        // Gate 7: Skill-derived completion requirements.
+        // For each resolved skill targeting specific file types, if any
+        // changed files match the skill's applicability patterns, at
+        // least one matching file must be inspected.
+        let failed_skill_reqs = crate::skills::check_skill_completion_requirements(
+            &state.changed_files,
+            &state.inspected_paths,
+        );
+        if !failed_skill_reqs.is_empty() {
+            return CompletionDecision::RejectedRemediable {
+                reason_codes: vec!["skill_completion_requirements_not_met".into()],
+                missing_requirements: failed_skill_reqs.clone(),
+                feedback_for_model: vec![InstructionBlock {
+                    content: format!(
+                        "Skill-specific requirements not met: {}",
+                        failed_skill_reqs.join("; ")
+                    ),
+                }],
+            };
+        }
+
         // All gates passed.
         *self.pending_completion.borrow_mut() = Some(completion.clone());
         *self.completion_accepted.borrow_mut() = true;

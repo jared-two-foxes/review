@@ -66,3 +66,106 @@ pub fn resolve_skills(changed_files: &[String]) -> Vec<Skill> {
         })
         .collect()
 }
+
+/// Check skill-derived completion requirements against review state.
+///
+/// For each resolved skill with applicability patterns, if any changed
+/// files match the patterns, at least one matching file must be inspected.
+/// this ensures that a skill's guidance was actually followed - the model
+/// can't skip all files that the skill targets.
+///
+/// Skills with empty applicability (e.g. general-implementation-review)
+/// are skipped - the apply to all files and don't target a specific
+/// language or file type.
+///
+/// This is language-agnostic: it uses the skill's applicability glob
+/// patterns, so it works automatically for Rust, C++, Typescript,
+/// Python, or any future skill without per-language hardcoding.
+pub fn check_skill_completion_requirements(
+    changed_files: &[String],
+    inspected_paths: &[String],
+) -> Vec<String> {
+    resolve_skills(changed_files)
+        .iter()
+        .filter(|skill| !skill.applicability.is_empty())
+        .filter_map(|skill| {
+            let relevant_changed: Vec<&String> = changed_files.iter().filter(|p| {
+                skill.applicability.iter().any(|pattern| glob_matches(pattern, p))
+            }).collect();
+            if relevant_changed.is_empty() {
+                return None;
+            }
+            let any_relevant_changed_inspected = relevant_changed.iter().any(|p| inspected_paths.contains(p));
+            if any_relevant_changed_inspected {
+                None
+            } else {
+                Some(format!(
+                    "Skill '{}' is applicable to this change but no matching files were inspected.  Call read_diff or read_file on files matching the skill's patterns before completing: {}.", skill.id, relevant_changed.iter().map(|p| p.as_str()).collect::<Vec<_>>().join(", "),
+                ))
+            }
+        }).collect()
+}
+
+#[cfg(test)]
+mod skill_requirement_tests {
+    use crate::skills::check_skill_completion_requirements;
+
+    #[test]
+    fn passes_when_applicable_files_are_inspected() {
+        let changed = vec!["src/main.rs".into()];
+        let inspected = vec!["src/main.rs".into()];
+        let failures = check_skill_completion_requirements(&changed, &inspected);
+        assert!(failures.is_empty());
+    }
+
+    #[test]
+    fn fails_when_applicable_files_not_inspected() {
+        let changed = vec!["src/main.rs".into()];
+        let inspected = vec!["README.md".into()];
+        let failures = check_skill_completion_requirements(&changed, &inspected);
+        assert!(failures.iter().any(|f| f.contains("rust-review")));
+    }
+
+    #[test]
+    fn passes_when_no_applicable_files_in_change() {
+        let changed = vec!["README.md".into()];
+        let inspected = vec![];
+        let failures = check_skill_completion_requirements(&changed, &inspected);
+        assert!(failures.is_empty());
+    }
+
+    #[test]
+    fn passes_when_at_least_one_applicable_file_inspected() {
+        let changed = vec!["src/main.rs".into(), "src/lib.rs".into()];
+        let inspected = vec!["src/main.rs".into()]; // only one, but that's enough
+        let failures = check_skill_completion_requirements(&changed, &inspected);
+        assert!(failures.is_empty());
+    }
+
+    #[test]
+    fn general_skill_skipped() {
+        // General skill has empty applicability — no requirement generated.
+        // A change with only non-matching files should have no failures.
+        let changed = vec!["config.toml".into()];
+        let inspected = vec![];
+        let failures = check_skill_completion_requirements(&changed, &inspected);
+        assert!(failures.is_empty());
+    }
+
+    #[test]
+    fn fails_when_only_unchanged_matching_file_is_inspected() {
+        // Changed file is src/main.rs, but the model only inspected
+        // src/lib.rs (unchanged, but also .rs). The gate should fail
+        // because no CHANGED .rs file was inspected.
+        let changed = vec!["src/main.rs".into()];
+        let inspected = vec!["src/lib.rs".into()]; // unchanged .rs file
+        let failures = check_skill_completion_requirements(&changed, &inspected);
+        assert!(
+            failures
+                .iter()
+                .any(|f| f.contains("rust-review") && f.contains("src/main.rs")),
+            "gate should fail and name the uninspected changed file, got: {:?}",
+            failures
+        );
+    }
+}
