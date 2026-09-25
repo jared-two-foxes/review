@@ -1,4 +1,5 @@
 use agent_protocol::IdGenerator;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tracing;
@@ -66,9 +67,8 @@ where
             .filter_map(|name| self.catalog.get(name).map(|t| t.description()))
             .collect();
 
-        let mut seen_tool_calls: std::collections::HashSet<(String, String)> =
-            std::collections::HashSet::new();
-        let mut repeated_action_count: u32 = 0;
+        let mut latest_tool_call_ids: HashMap<(String, String), String> = HashMap::new();
+        let mut repeat_counts: HashMap<(String, String), u32> = HashMap::new();
 
         // -- Budget counter --
         let mut turn = 0u32;
@@ -123,19 +123,7 @@ where
             // Truncate history by complete turns when exceeding budget.
             // A "turn" = one Assitant message + all following Tool/User messages
             // until next Assistant message.
-            const MAX_HISTORY_MESSAGES: usize = 30;
-            while history.len() > MAX_HISTORY_MESSAGES {
-                let first_assistant_index = history
-                    .iter()
-                    .position(|msg| matches!(msg, ConversationMessage::Assistant { .. }))
-                    .unwrap_or(0);
-                let next_assistant_index = history[first_assistant_index + 1..]
-                    .iter()
-                    .position(|msg| matches!(msg, ConversationMessage::Assistant { .. }))
-                    .map(|i| i + first_assistant_index + 1)
-                    .unwrap_or(history.len());
-                history.drain(first_assistant_index..next_assistant_index);
-            }
+            compact_history(&mut history);
 
             let model_request = CanonicalModelRequest {
                 instructions,
@@ -325,10 +313,35 @@ where
                             tool.clone(),
                             serde_json::to_string(&arguments).unwrap_or_default(),
                         );
-                        if !seen_tool_calls.insert(call_key) {
-                            repeated_action_count += 1;
-                            if repeated_action_count >= self.limits.max_repeated_actions {
-                                tracing::warn!(turn, tool= %tool, repeated = repeated_action_count, "session stalled: repeated identical tool calls");
+
+                        // If this tool was called before with teh same arguments, compact the
+                        // earlier result to a pointer.  The latest result stays in full.
+                        if let Some(prev_id) = latest_tool_call_ids.get(&call_key) {
+                            for msg in history.iter_mut() {
+                                if let ConversationMessage::Tool {
+                                    tool_call_id,
+                                    content,
+                                } = msg
+                                {
+                                    if tool_call_id == prev_id {
+                                        *content = format!(
+                                            "[deduplicated: superseded by a later call to \"{}\" with the same arguments.]",
+                                            tool
+                                        );
+                                        break;
+                                    }
+                                }
+                            }
+
+                            let count = repeat_counts.entry(call_key.clone()).or_insert(0);
+                            *count += 1;
+                            if *count >= self.limits.max_repeated_actions {
+                                tracing::warn!(
+                                    turn,
+                                    tool = %tool,
+                                    repeated = *count,
+                                    "session stalled: repeated identical tool calls"
+                                );
                                 self.append_event_with_details(
                                     &session_id,
                                     turn,
@@ -336,7 +349,7 @@ where
                                     "kernel.session_stalled",
                                     Some(format!(
                                         "repeated identical call to \"{}\" {} times",
-                                        tool, repeated_action_count
+                                        tool, *count,
                                     )),
                                 );
                                 return (
@@ -345,6 +358,9 @@ where
                                 );
                             }
                         }
+
+                        latest_tool_call_ids.insert(call_key, action_id.clone());
+
                         history.push(ConversationMessage::Tool {
                             tool_call_id: action_id.clone(),
                             content: format!(
@@ -546,9 +562,76 @@ fn build_tool_event_details(
     Some(summary.to_string())
 }
 
+/// Maximum total byte count o tool result content before truncation
+/// ~80KB ~= 20K tokens, leaving room for system prompt and model output,
+const MAX_HISTORY_BYTES: usize = 80_000;
+
+/// Tool results larger than this are eligibale for truncation.
+const TRUNCATION_THRESHOLD_BYTES: usize = 2_000;
+
+/// How many bytes to keep when truncating a large tool result.
+const TRUNCATION_KEEP_BYTES: usize = 1_000;
+
+/// Bytes of recent history to preserve in full (the model's working set).
+const PRESERVED_RECENT_BYTES: usize = 20_000;
+
+/// Compact conversation hustory by truncating old, large tool results.
+///
+/// Only Tool messages older than the preserved zone and larger than the
+/// truncation threshold are truncated.  Assistant messages, User message,
+/// dedupliated results, and recent results are left untouched
+fn compact_history(history: &mut Vec<ConversationMessage>) {
+    let total_bytes: usize = history
+        .iter()
+        .map(|msg| match msg {
+            ConversationMessage::Tool { content, .. } => content.len(),
+            _ => 0,
+        })
+        .sum();
+
+    if total_bytes <= MAX_HISTORY_BYTES {
+        return;
+    }
+
+    // Find the cutoff: iterate from the end, preserving the most recent
+    // bytes up to PRESERVED_RECENT_BYTES.
+    let mut accumulated = 0usize;
+    let mut cutoff = history.len();
+    for (i, msg) in history.iter().enumerate().rev() {
+        if accumulated >= PRESERVED_RECENT_BYTES {
+            cutoff = i + 1;
+            break;
+        }
+        if let ConversationMessage::Tool { content, .. } = msg {
+            accumulated += content.len();
+        }
+        cutoff = i;
+    }
+
+    // Truncate large Tool messages before the cutoff.
+    for msg in history[..cutoff].iter_mut() {
+        if let ConversationMessage::Tool { content, .. } = msg {
+            if content.len() > TRUNCATION_THRESHOLD_BYTES && !content.starts_with("[deduplicated:")
+            {
+                let limit = content.len().min(TRUNCATION_KEEP_BYTES);
+                let mut keep_end = limit;
+                while !content.is_char_boundary(keep_end) {
+                    keep_end -= 1;
+                }
+                let original_len = content.len();
+                *content = format!(
+                    "{}\n[truncated: {} more bytes - re-call this tool to see full content]",
+                    &content[..keep_end],
+                    original_len.saturating_sub(keep_end)
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::build_tool_event_details;
+    use super::{build_tool_event_details, compact_history, TRUNCATION_KEEP_BYTES};
     use crate::tools::{ToolResult, ToolStatus};
     use serde_json::json;
 
@@ -577,5 +660,153 @@ mod tests {
                 "changed_files": ["src/main.rs", "src/lib.rs"]
             })
         );
+    }
+
+    #[test]
+    fn compact_history_truncates_old_large_tool_results() {
+        use crate::model::ConversationMessage;
+
+        // 10 large old messages (10K each = 100K total) + 1 recent (5K).
+        // Total = 105K > MAX_HISTORY_BYTES (80K), so truncation triggers.
+        // Preserved zone (20K from end) covers the last 3 messages
+        // (5K + 10K + 10K = 25K), so messages 0-7 are eligible.
+        let mut history: Vec<ConversationMessage> = (0..10)
+            .map(|i| ConversationMessage::Tool {
+                tool_call_id: format!("old-{i}"),
+                content: "x".repeat(10_000),
+            })
+            .collect();
+        history.push(ConversationMessage::Tool {
+            tool_call_id: "recent-1".into(),
+            content: "z".repeat(5_000),
+        });
+
+        compact_history(&mut history);
+
+        // Old messages (before preserved zone) should be truncated.
+        assert!(
+            matches!(&history[0], ConversationMessage::Tool { content, .. } if content.contains("[truncated:"))
+        );
+        assert!(
+            matches!(&history[1], ConversationMessage::Tool { content, .. } if content.contains("[truncated:"))
+        );
+        // Recent message (within preserved zone) should be unchanged.
+        assert!(
+            matches!(&history[10], ConversationMessage::Tool { content, .. } if content.len() == 5_000 && !content.contains("[truncated:"))
+        );
+    }
+
+    #[test]
+    fn compact_history_preserves_short_results() {
+        use crate::model::ConversationMessage;
+
+        // 1 short old message + 9 large old messages (10K each) + 1 recent large.
+        // Total = 100.5K > MAX_HISTORY_BYTES (80K), so truncation triggers.
+        // Preserved zone (20K from end) covers the last 2 messages
+        // (10K + 10K = 20K), so messages 0-9 are eligible.
+        let mut history = vec![ConversationMessage::Tool {
+            tool_call_id: "short-old".into(),
+            content: "small result".into(),
+        }];
+        for i in 0..9 {
+            history.push(ConversationMessage::Tool {
+                tool_call_id: format!("large-old-{i}"),
+                content: "x".repeat(10_000),
+            });
+        }
+        history.push(ConversationMessage::Tool {
+            tool_call_id: "recent-1".into(),
+            content: "z".repeat(10_000),
+        });
+
+        compact_history(&mut history);
+
+        // Short result should be unchanged (under TRUNCATION_THRESHOLD_BYTES).
+        assert!(
+            matches!(&history[0], ConversationMessage::Tool { content, .. } if content == "small result")
+        );
+        // Large old result should be truncated.
+        assert!(
+            matches!(&history[1], ConversationMessage::Tool { content, .. } if content.contains("[truncated:"))
+        );
+        // Recent message should be unchanged.
+        assert!(
+            matches!(&history[10], ConversationMessage::Tool { content, .. } if content.len() == 10_000 && !content.contains("[truncated:"))
+        );
+    }
+
+    #[test]
+    fn compact_history_skips_deduplicated_results() {
+        use crate::model::ConversationMessage;
+
+        let mut history = vec![
+            ConversationMessage::Tool {
+                tool_call_id: "dedup-1".into(),
+                content: "[deduplicated: superseded by a later call]".repeat(500),
+            },
+            ConversationMessage::Tool {
+                tool_call_id: "large-1".into(),
+                content: "x".repeat(90_000),
+            },
+        ];
+
+        compact_history(&mut history);
+
+        // Deduplicated result should not be double-truncated.
+        assert!(
+            matches!(&history[0], ConversationMessage::Tool { content, .. } if !content.contains("[truncated:"))
+        );
+    }
+
+    #[test]
+    fn compact_history_noop_when_under_threshold() {
+        use crate::model::ConversationMessage;
+
+        let mut history = vec![ConversationMessage::Tool {
+            tool_call_id: "1".into(),
+            content: "small".into(),
+        }];
+
+        compact_history(&mut history);
+
+        assert!(
+            matches!(&history[0], ConversationMessage::Tool { content, .. } if content == "small")
+        );
+    }
+
+    #[test]
+    fn compact_history_truncates_at_byte_boundary_not_char_boundary() {
+        use crate::model::ConversationMessage;
+
+        // 4-byte UTF-8 characters (🎉 = U+1F389, 4 bytes in UTF-8).
+        // 30,000 of them = 120,000 bytes. With the old char_indices().nth()
+        // approach, the 1,000th character would be at byte offset 4,000,
+        // keeping ~4KB instead of the intended ~1KB.
+        let large_multi_byte: String = "🎉".repeat(30_000);
+
+        // A second recent message pushes the large one outside the
+        // preserved zone so it becomes eligible for truncation.
+        let mut history = vec![
+            ConversationMessage::Tool {
+                tool_call_id: "old-multi-byte".into(),
+                content: large_multi_byte,
+            },
+            ConversationMessage::Tool {
+                tool_call_id: "recent".into(),
+                content: "z".repeat(20_001),
+            },
+        ];
+
+        compact_history(&mut history);
+
+        if let ConversationMessage::Tool { content, .. } = &history[0] {
+            let kept = content.split("\n[truncated:").next().unwrap();
+            assert!(
+                kept.len() <= TRUNCATION_KEEP_BYTES,
+                "kept {} bytes, expected at most {}",
+                kept.len(),
+                TRUNCATION_KEEP_BYTES
+            );
+        }
     }
 }
