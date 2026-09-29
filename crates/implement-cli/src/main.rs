@@ -25,6 +25,7 @@ fn main() {
     let mut model: String = "openai/gpt-5.6-terra".into();
     let mut provider_root: Option<String> = None;
     let mut max_turns: u32 = 10;
+    let mut max_tool_calls: u32 = 10;
     let mut wall_clock_budget_secs: u64 = 60;
     let mut max_input_tokens: Option<u64> = None;
     let mut max_cost_usd: Option<f64> = None;
@@ -72,6 +73,11 @@ fn main() {
             }
             "--max-turns" => {
                 max_turns = parse_flag_value(&args, i, "--max-turns", "INVALID_MAX_TURNS");
+                i += 1;
+            }
+            "--max-tool-calls" => {
+                let value = flag_value(&args, i, "--max-tool-calls");
+                max_tool_calls = value.parse::<u32>().unwrap_or(10).max(1);
                 i += 1;
             }
             "--wall-clock-budget-secs" => {
@@ -205,7 +211,7 @@ fn main() {
         model,
         provider_root,
         max_turns,
-        max_tool_calls: 10,
+        max_tool_calls,
         max_completion_attempts: 3,
         wall_clock_budget: Some(Duration::from_secs(wall_clock_budget_secs)),
         ledger_path: ledger_path.map(PathBuf::from),
@@ -349,6 +355,12 @@ fn implement_cli_command() -> Command {
                         .long("max-turns")
                         .value_name("COUNT")
                         .help("Maximum model turns before stopping"),
+                )
+                .arg(
+                    Arg::new("max-tool-calls")
+                        .long("max-tool-calls")
+                        .value_name("COUNT")
+                        .help("Maximum number of tool calls before stopping"),
                 )
                 .arg(
                     Arg::new("wall-clock-budget-secs")
