@@ -342,7 +342,7 @@ where
                                     repeated = *count,
                                     "session stalled: repeated identical tool calls"
                                 );
-                                self.append_event_with_details(
+                                let stall_event = self.append_event_with_details(
                                     &session_id,
                                     turn,
                                     &action_id,
@@ -352,6 +352,7 @@ where
                                         tool, *count,
                                     )),
                                 );
+                                state = self.app.reduce_event(&state, &stall_event);
                                 return (
                                     self.app.build_terminal_result(&state, &usage),
                                     self.ledger.events().to_vec(),

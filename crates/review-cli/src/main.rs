@@ -18,6 +18,7 @@ fn main() {
     let mut provider_root: Option<String> = None;
     let mut max_turns: u32 = 10;
     let mut max_tool_calls: u32 = 40;
+    let mut max_repeated_actions: u32 = 3;
     let mut wall_clock_budget_secs: u64 = 60;
     let mut max_input_tokens: Option<u64> = None;
     let mut max_cost_usd: Option<f64> = None;
@@ -72,6 +73,13 @@ fn main() {
                 max_tool_calls = flag_value(&args, i, "--max-tool-calls")
                     .parse::<u32>()
                     .unwrap_or(40)
+                    .max(1);
+                i += 1;
+            }
+            "--max-repeated-actions" => {
+                max_repeated_actions = flag_value(&args, i, "--max-repeated-actions")
+                    .parse::<u32>()
+                    .unwrap_or(3)
                     .max(1);
                 i += 1;
             }
@@ -201,7 +209,7 @@ fn main() {
         max_input_tokens,
         max_cost_usd,
         ledger_path: ledger_path.map(|p| std::path::PathBuf::from(p)),
-        max_repeated_actions: 3,
+        max_repeated_actions,
     };
     let (result, _events, setup_err) =
         review_app::run_review(&request, &config, Some(&cancellation_token));
@@ -311,6 +319,12 @@ fn review_cli_command() -> Command {
                         .long("max-tool-calls")
                         .value_name("COUNT")
                         .help("Maximum number of tool calls before stopping"),
+                )
+                .arg(
+                    Arg::new("max-repeated-actions")
+                        .long("max-repeated-actions")
+                        .value_name("COUNT")
+                        .help("Maximum identical repeated tool calls before stalling"),
                 )
                 .arg(
                     Arg::new("wall-clock-budget-secs")
