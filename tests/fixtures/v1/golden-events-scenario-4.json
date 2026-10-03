@@ -25,5 +25,15 @@
     "execution_id": "",
     "details": "invalid arguments: invalid arguments: \"not-an-object\" is not of type \"object\"",
     "prev_hash": "sha256:2969756ab21cc6e832b7bf1d1e07425b6a1a9ee4e49ed2a85fd428fb285bbe65"
+  },
+  {
+    "event_type": "kernel.session_limit_exceeded",
+    "sequence": 3,
+    "session_id": "ses-001",
+    "turn": 2,
+    "action_id": "",
+    "execution_id": "",
+    "details": "exceeded max turns (1)",
+    "prev_hash": "sha256:ced1278fc1ae1586f404ceeaf7aa46950eeaabaacdbb8442bbb8eeb793ec3bc1"
   }
 ]

@@ -110,6 +110,14 @@ where
             }
 
             if turn > self.limits.max_turns {
+                let event = self.append_event_with_details(
+                    &session_id,
+                    turn,
+                    "",
+                    "kernel.session_limit_exceeded",
+                    Some(format!("exceeded max turns ({})", self.limits.max_turns)),
+                );
+                state = self.app.reduce_event(&state, &event);
                 return (
                     self.app.build_terminal_result(&state, &usage),
                     self.ledger.events().to_vec(),
@@ -244,6 +252,17 @@ where
                     } => {
                         tool_call_count += 1;
                         if tool_call_count > self.limits.max_tool_calls {
+                            let event = self.append_event_with_details(
+                                &session_id,
+                                turn,
+                                &action_id,
+                                "kernel.session_limit_exceeded",
+                                Some(format!(
+                                    "exceeded max tool calls ({})",
+                                    self.limits.max_tool_calls
+                                )),
+                            );
+                            state = self.app.reduce_event(&state, &event);
                             return (
                                 self.app.build_terminal_result(&state, &usage),
                                 self.ledger.events().to_vec(),
@@ -386,6 +405,17 @@ where
                     ModelAction::CompletionRequest { action_id, payload } => {
                         completion_attempt_count += 1;
                         if completion_attempt_count > self.limits.max_completion_attempts {
+                            let event = self.append_event_with_details(
+                                &session_id,
+                                turn,
+                                &action_id,
+                                "kernel.session_limit_exceeded",
+                                Some(format!(
+                                    "exceeded max completion attempts ({})",
+                                    self.limits.max_completion_attempts
+                                )),
+                            );
+                            state = self.app.reduce_event(&state, &event);
                             return (
                                 self.app.build_terminal_result(&state, &usage),
                                 self.ledger.events().to_vec(),

@@ -27,6 +27,7 @@ fn main() {
     let mut max_turns: u32 = 10;
     let mut max_tool_calls: u32 = 10;
     let mut max_repeated_actions: u32 = 3;
+    let mut max_completion_attempts: u32 = 3;
     let mut wall_clock_budget_secs: u64 = 60;
     let mut max_input_tokens: Option<u64> = None;
     let mut max_cost_usd: Option<f64> = None;
@@ -84,6 +85,11 @@ fn main() {
             "--max-repeated-actions" => {
                 let value = flag_value(&args, i, "--max-repeated-actions");
                 max_repeated_actions = value.parse::<u32>().unwrap_or(3).max(1);
+                i += 1;
+            }
+            "--max-completion-attempts" => {
+                let value = flag_value(&args, i, "--max-completion-attempts");
+                max_completion_attempts = value.parse::<u32>().unwrap_or(3).max(1);
                 i += 1;
             }
             "--wall-clock-budget-secs" => {
@@ -218,7 +224,7 @@ fn main() {
         provider_root,
         max_turns,
         max_tool_calls,
-        max_completion_attempts: 3,
+        max_completion_attempts,
         wall_clock_budget: Some(Duration::from_secs(wall_clock_budget_secs)),
         ledger_path: ledger_path.map(PathBuf::from),
         max_repeated_actions,
@@ -373,6 +379,12 @@ fn implement_cli_command() -> Command {
                         .long("max-repeated-actions")
                         .value_name("COUNT")
                         .help("Maximum identical repeated tool calls before stalling"),
+                )
+                .arg(
+                    Arg::new("max-completion-attempts")
+                        .long("max-completion-attempts")
+                        .value_name("COUNT")
+                        .help("Maximum completion attempts before stopping"),
                 )
                 .arg(
                     Arg::new("wall-clock-budget-secs")

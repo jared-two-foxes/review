@@ -24,5 +24,15 @@
     "action_id": "act-1",
     "execution_id": "",
     "prev_hash": "sha256:2969756ab21cc6e832b7bf1d1e07425b6a1a9ee4e49ed2a85fd428fb285bbe65"
+  },
+  {
+    "event_type": "kernel.session_limit_exceeded",
+    "sequence": 3,
+    "session_id": "ses-001",
+    "turn": 2,
+    "action_id": "",
+    "execution_id": "",
+    "details": "exceeded max turns (1)",
+    "prev_hash": "sha256:1a89877edf11fbd96ec55d0741e74491b4cb133f64c35de55140ff4bb77bb448"
   }
 ]
