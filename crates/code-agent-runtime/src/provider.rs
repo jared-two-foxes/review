@@ -752,7 +752,7 @@ impl WireFormat for MessagesWireFormat {
         // Never accept a truncated or refused review, even if its text parses as JSON.
         if matches!(
             response["stop_reason"].as_str(),
-            Some("max_tokens" | "refusal")
+            Some("max_tokens" | "model_context_window_exceeded" | "refusal")
         ) {
             return vec![];
         }

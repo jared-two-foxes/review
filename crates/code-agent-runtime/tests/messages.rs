@@ -219,6 +219,7 @@ fn messages_round_trip_tools_history_completion_and_usage() {
 fn messages_reject_truncation_refusal_and_malformed_tool_inputs() {
     for response in [
         json!({"stop_reason":"max_tokens","content":[{"type":"text","text":"{\"findings\":[]}"}]}),
+        json!({"stop_reason":"model_context_window_exceeded","content":[{"type":"text","text":"{\"findings\":[]}"}]}),
         json!({"stop_reason":"refusal","content":[{"type":"text","text":"{\"findings\":[]}"}]}),
         json!({"content":[{"type":"tool_use","id":"c1","name":"read_file","input":123},{"type":"text","text":"{\"findings\":[]}"}]}),
         json!({"content":[{"type":"tool_use","name":"read_file","input":{}}]}),
