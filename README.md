@@ -78,11 +78,14 @@ Common flags include:
 
 Provider routing is model-driven:
 
-- `--model opencode/gpt-5.6-terra` (or any unprefixed model) routes to OpenAI (`OPENCODE_API_KEY`)
+- The default `--model opencode/gpt-5.6-terra` routes to OpenCode Zen (`OPENCODE_API_KEY`). Unprefixed models route to OpenAI (`OPENAI_API_KEY`).
 - `--model openai/<model-name>` routes to OpenAI (`OPENAI_API_KEY`)
 - `--model ollama/<model-name>` routes to Ollama (`http://127.0.0.1:11434/v1/chat/completions`)
-- `--model opencode/<model-name>` routes to OpenCode (`https://opencode.ai/zen/v1/chat/completions`, `OPENCODE_API_KEY`)
+- `--model opencode/<model-name>` routes to OpenCode Zen (`https://opencode.ai/zen/v1`, `OPENCODE_API_KEY`). Claude models (`claude-*`) use `/messages`; GPT-5/6, Grok and Muse Spark use `/responses`; other models use `/chat/completions`.
+- `--model anthropic/<model-name>` routes to the Anthropic Messages API (`https://api.anthropic.com/v1/messages`, `ANTHROPIC_API_KEY`).
 - `--model copilot/<model-name>` or `--model github-copilot/<model-name>` routes to GitHub Copilot (`GITHUB_TOKEN`)
+
+Messages requests use `x-api-key` and `anthropic-version: 2023-06-01`, with an output limit of 8192 tokens per turn. They support tool calls/results and JSON review completions. Truncated or refused completions are not accepted. Token usage includes cache reads/writes; dollar cost is left unknown rather than applying a generic rate. `--base-url` overrides the API root (for example `https://proxy.example/v1`); keep the provider prefix to select the Messages format.
 
 The `implement-cli` binary follows the same provider-routing model and runtime flags, but builds `ImplementRequest` values instead. It supports either:
 

@@ -398,7 +398,7 @@ fn run_implement_rejects_unknown_provider_prefix() {
         desired_content: "after".into(),
     };
     let config = ImplementConfig {
-        model: "anthropic/claude".into(),
+        model: "unknown/claude".into(),
         ..ImplementConfig::default()
     };
 

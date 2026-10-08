@@ -31,6 +31,12 @@ fn spawn_provider_probe() -> (String, thread::JoinHandle<String>) {
                 .expect("provider request must contain Content-Length");
             let body_start = headers_end + 4;
             if bytes.len() >= body_start + content_length {
+                if headers.starts_with("POST /v1/messages ") {
+                    let headers = headers.to_ascii_lowercase();
+                    assert!(headers.contains("x-api-key: test-key"));
+                    assert!(headers.contains("anthropic-version: 2023-06-01"));
+                    assert!(!headers.contains("authorization:"));
+                }
                 break bytes[body_start..body_start + content_length].to_vec();
             }
         };
@@ -183,7 +189,7 @@ fn unknown_model_provider_prefix_is_rejected() {
             "--head-ref",
             "HEAD",
             "--model",
-            "anthropic/claude-sonnet",
+            "unknown/claude-sonnet",
         ])
         .output()
         .expect("review CLI should be executable");
@@ -274,4 +280,47 @@ fn opencode_model_prefix_routes_and_strips_provider_name() {
     let result: Value =
         serde_json::from_slice(&output.stdout).expect("CLI output should be a JSON review result");
     assert_eq!(result["status"], "INDETERMINATE");
+}
+
+#[test]
+fn messages_models_route_from_cli_with_provider_environment_keys() {
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    for (model, key_var) in [
+        ("anthropic/claude-sonnet-4-5", "ANTHROPIC_API_KEY"),
+        ("opencode/claude-sonnet-4-5", "OPENCODE_API_KEY"),
+    ] {
+        let (base_url, server) = spawn_provider_probe();
+        let base_url = base_url.trim_end_matches("/chat/completions");
+        let output = Command::new(env!("CARGO_BIN_EXE_review-cli"))
+            .args([
+                "run",
+                "--repository",
+                workspace_root.to_str().unwrap(),
+                "--base-ref",
+                "HEAD~1",
+                "--head-ref",
+                "HEAD",
+                "--model",
+                model,
+                "--base-url",
+                base_url,
+                "--wall-clock-budget-secs",
+                "5",
+            ])
+            .env(key_var, "test-key")
+            .env("OPENAI_API_KEY", "")
+            .output()
+            .expect("execute CLI");
+        let body: Value = serde_json::from_str(&server.join().unwrap()).unwrap();
+        assert_eq!(body["model"], "claude-sonnet-4-5");
+        assert_eq!(body["max_tokens"], 8192);
+        assert!(body["system"].is_string());
+        assert!(body["tools"][0]["input_schema"].is_object());
+        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["status"], "INDETERMINATE");
+    }
 }
