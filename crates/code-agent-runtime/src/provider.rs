@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 pub enum ApiStyle {
     ChatCompletions,
     Responses,
+    Messages,
 }
 
 pub enum AuthError {
@@ -46,6 +47,22 @@ impl RequestAuth for BearerAuth {
         _deadline: Option<Instant>,
     ) -> Result<reqwest::blocking::RequestBuilder, AuthError> {
         Ok(req.header("Authorization", format!("Bearer {}", self.token)))
+    }
+}
+
+struct MessagesAuth {
+    api_key: String,
+}
+
+impl RequestAuth for MessagesAuth {
+    fn amend(
+        &mut self,
+        req: reqwest::blocking::RequestBuilder,
+        _deadline: Option<Instant>,
+    ) -> Result<reqwest::blocking::RequestBuilder, AuthError> {
+        Ok(req
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01"))
     }
 }
 
@@ -143,10 +160,12 @@ fn auth_for(
     provider: &str,
     api_key: String,
     client: reqwest::blocking::Client,
+    api_style: ApiStyle,
 ) -> Box<dyn RequestAuth> {
-    match provider {
-        "openai" | "ollama" | "opencode" => Box::new(BearerAuth { token: api_key }),
-        "copilot" | "github-copilot" => {
+    match (provider, api_style) {
+        ("anthropic" | "opencode", ApiStyle::Messages) => Box::new(MessagesAuth { api_key }),
+        ("openai" | "ollama" | "opencode", _) => Box::new(BearerAuth { token: api_key }),
+        ("copilot" | "github-copilot", _) => {
             if api_key.starts_with("tid=") {
                 Box::new(BearerAuth { token: api_key })
             } else {
@@ -176,8 +195,11 @@ fn resolve_api_style(provider: &str, model: &str) -> ApiStyle {
                 ApiStyle::ChatCompletions
             }
         }
+        "anthropic" => ApiStyle::Messages,
         "opencode" => {
-            if model.starts_with("gpt-5")
+            if model.starts_with("claude-") {
+                ApiStyle::Messages
+            } else if model.starts_with("gpt-5")
                 || model.starts_with("gpt-6")
                 || model.starts_with("grok")
                 || model.starts_with("muse-spark")
@@ -220,6 +242,10 @@ pub fn resolve_provider_route_with_root(
                 "https://api.openai.com/v1",
                 std::env::var("OPENAI_API_KEY").unwrap_or_default(),
             ),
+            "anthropic" => (
+                "https://api.anthropic.com/v1",
+                std::env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
+            ),
             "ollama" => (
                 "http://127.0.0.1:11434/v1",
                 std::env::var("OLLAMA_API_KEY").unwrap_or_else(|_| "ollama".into()),
@@ -242,7 +268,7 @@ pub fn resolve_provider_route_with_root(
             ),
             _ => {
                 return Err(format!(
-                    "unsupported model provider prefix '{}'; supported prefixes are openai/, ollama/, opencode/, copilot/, github-copilot/",
+                    "unsupported model provider prefix '{}'; supported prefixes are openai/, anthropic/, ollama/, opencode/, copilot/, github-copilot/",
                     provider
                 ));
             }
@@ -629,9 +655,157 @@ impl WireFormat for ResponsesWireFormat {
     }
 }
 
-/// OpenAI-compatible model provider adapter.
+/// Anthropic Messages wire format, also used by Claude routes on OpenCode Zen.
+struct MessagesWireFormat;
+
+impl WireFormat for MessagesWireFormat {
+    fn endpoint_suffix(&self) -> &'static str {
+        "messages"
+    }
+
+    fn serialize_request(&self, request: &CanonicalModelRequest, model: &str) -> Value {
+        // Merge consecutive roles so parallel tool results share the user turn
+        // immediately following their assistant tool_use blocks.
+        fn append(messages: &mut Vec<Value>, role: &str, blocks: Vec<Value>) {
+            if blocks.is_empty() {
+                return;
+            }
+            if let Some(last) = messages.last_mut().filter(|m| m["role"] == role) {
+                last["content"].as_array_mut().unwrap().extend(blocks);
+            } else {
+                messages.push(json!({"role": role, "content": blocks}));
+            }
+        }
+
+        let mut messages = Vec::new();
+        for context in &request.context {
+            append(
+                &mut messages,
+                "user",
+                vec![json!({"type": "text", "text": context.content})],
+            );
+        }
+        for message in &request.history {
+            match message {
+                ConversationMessage::Assistant {
+                    content,
+                    tool_calls,
+                } => {
+                    let mut blocks = Vec::new();
+                    if let Some(text) = content.as_ref().filter(|text| !text.is_empty()) {
+                        blocks.push(json!({"type": "text", "text": text}));
+                    }
+                    for call in tool_calls {
+                        blocks.push(json!({
+                            "type": "tool_use", "id": call.id,
+                            "name": call.name, "input": call.arguments,
+                        }));
+                    }
+                    append(&mut messages, "assistant", blocks);
+                }
+                ConversationMessage::Tool {
+                    tool_call_id,
+                    content,
+                } => {
+                    append(
+                        &mut messages,
+                        "user",
+                        vec![json!({
+                            "type": "tool_result", "tool_use_id": tool_call_id, "content": content,
+                        })],
+                    );
+                }
+                ConversationMessage::User { content } => {
+                    append(
+                        &mut messages,
+                        "user",
+                        vec![json!({"type": "text", "text": content})],
+                    );
+                }
+            }
+        }
+        let mut body = json!({
+            "model": model,
+            "max_tokens": 8192,
+            "messages": messages,
+        });
+        let system = request
+            .instructions
+            .iter()
+            .map(|i| i.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !system.is_empty() {
+            body["system"] = json!(system);
+        }
+        if !request.tools.is_empty() {
+            body["tools"] = request.tools.iter().map(|tool| json!({
+                "name": tool.name, "description": tool.description, "input_schema": tool.input_schema,
+            })).collect();
+        }
+        body
+    }
+
+    fn parse_response(&self, response: &Value) -> Vec<ModelAction> {
+        // Never accept a truncated or refused review, even if its text parses as JSON.
+        if matches!(
+            response["stop_reason"].as_str(),
+            Some("max_tokens" | "model_context_window_exceeded" | "refusal")
+        ) {
+            return vec![];
+        }
+        let Some(blocks) = response["content"].as_array() else {
+            return vec![];
+        };
+        if blocks.iter().any(|block| block["type"] == "tool_use") {
+            return blocks
+                .iter()
+                .filter(|block| block["type"] == "tool_use")
+                .filter_map(|block| {
+                    let arguments = block["input"].as_object()?;
+                    Some(ModelAction::ToolCall {
+                        action_id: block["id"].as_str()?.to_string(),
+                        tool: block["name"].as_str()?.to_string(),
+                        arguments: json!(arguments),
+                    })
+                })
+                .collect();
+        }
+        let text = blocks
+            .iter()
+            .filter(|block| block["type"] == "text")
+            .filter_map(|block| block["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("");
+        parse_content_completion(&text)
+            .map(|payload| {
+                vec![ModelAction::CompletionRequest {
+                    action_id: "completion".into(),
+                    payload,
+                }]
+            })
+            .unwrap_or_default()
+    }
+
+    fn normalize_usage(&self, response: &Value) -> UsageRecord {
+        let usage = &response["usage"];
+        UsageRecord {
+            // Anthropic reports uncached, cache-write and cache-read input separately.
+            input_tokens: usage["input_tokens"]
+                .as_u64()
+                .unwrap_or(0)
+                .saturating_add(usage["cache_creation_input_tokens"].as_u64().unwrap_or(0))
+                .saturating_add(usage["cache_read_input_tokens"].as_u64().unwrap_or(0)),
+            output_tokens: usage["output_tokens"].as_u64().unwrap_or(0),
+            // Rates vary by model, provider and cache use; do not invent a price.
+            estimated_cost_usd: None,
+        }
+    }
+}
+
+/// Model provider adapter for OpenAI-compatible and Anthropic Messages APIs.
 ///
-/// Serializes canonical model requests into the OpenAI chat completion API
+/// Serializes canonical model requests into the selected provider API
 /// format and parses responses back into canonical model actions. All
 /// provider-specific wire types stay private to this module.
 pub struct OpenAiProvider {
@@ -646,6 +820,7 @@ fn wire_format_for(style: ApiStyle) -> Box<dyn WireFormat> {
     match style {
         ApiStyle::ChatCompletions => Box::new(ChatCompletionsWireFormat),
         ApiStyle::Responses => Box::new(ResponsesWireFormat),
+        ApiStyle::Messages => Box::new(MessagesWireFormat),
     }
 }
 
@@ -656,7 +831,12 @@ impl OpenAiProvider {
             .build()
             .expect("Failed to build HTTP client");
         let wire_format = wire_format_for(route.api_style);
-        let auth = auth_for(&route.provider, route.api_key, client.clone());
+        let auth = auth_for(
+            &route.provider,
+            route.api_key,
+            client.clone(),
+            route.api_style,
+        );
 
         Self {
             provider_root: route.provider_root,

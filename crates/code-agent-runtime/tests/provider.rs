@@ -50,7 +50,7 @@ fn model_prefix_routing_honors_explicit_api_key() {
 
 #[test]
 fn model_prefix_routing_rejects_unknown_provider_prefixes() {
-    let error = resolve_provider_route("anthropic/claude", None)
+    let error = resolve_provider_route("unknown/claude", None)
         .expect_err("unknown provider prefix must fail validation");
     assert!(error.contains("unsupported model provider prefix"));
 }

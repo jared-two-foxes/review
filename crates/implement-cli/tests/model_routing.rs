@@ -104,7 +104,7 @@ fn unknown_model_provider_prefix_is_rejected() {
             "--desired-content",
             "after",
             "--model",
-            "anthropic/claude-sonnet",
+            "unknown/claude-sonnet",
         ])
         .output()
         .expect("implement CLI should be executable");
