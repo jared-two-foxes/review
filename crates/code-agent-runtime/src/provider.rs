@@ -162,12 +162,10 @@ fn auth_for(
     client: reqwest::blocking::Client,
     api_style: ApiStyle,
 ) -> Box<dyn RequestAuth> {
-    if api_style == ApiStyle::Messages {
-        return Box::new(MessagesAuth { api_key });
-    }
-    match provider {
-        "openai" | "ollama" | "opencode" => Box::new(BearerAuth { token: api_key }),
-        "copilot" | "github-copilot" => {
+    match (provider, api_style) {
+        ("anthropic" | "opencode", ApiStyle::Messages) => Box::new(MessagesAuth { api_key }),
+        ("openai" | "ollama" | "opencode", _) => Box::new(BearerAuth { token: api_key }),
+        ("copilot" | "github-copilot", _) => {
             if api_key.starts_with("tid=") {
                 Box::new(BearerAuth { token: api_key })
             } else {
