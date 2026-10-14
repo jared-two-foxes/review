@@ -767,19 +767,19 @@ impl WireFormat for MessagesWireFormat {
         body
     }
 
-    fn parse_response(&self, response: &Value) -> Vec<ModelAction> {
+    fn parse_response(&self, response: &Value) -> ParsedOutput {
         // Never accept a truncated or refused review, even if its text parses as JSON.
         if matches!(
             response["stop_reason"].as_str(),
             Some("max_tokens" | "model_context_window_exceeded" | "refusal")
         ) {
-            return vec![];
+            return ParsedOutput { actions: vec![], reasoning: None };
         }
         let Some(blocks) = response["content"].as_array() else {
-            return vec![];
+            return ParsedOutput { actions: vec![], reasoning: None };
         };
         if blocks.iter().any(|block| block["type"] == "tool_use") {
-            return blocks
+            let actions = blocks
                 .iter()
                 .filter(|block| block["type"] == "tool_use")
                 .filter_map(|block| {
@@ -791,6 +791,14 @@ impl WireFormat for MessagesWireFormat {
                     })
                 })
                 .collect();
+            let reasoning = blocks
+                .iter()
+                .filter(|block| block["type"] == "text")
+                .filter_map(|block| block["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("");
+            let reasoning = if reasoning.is_empty() { None } else { Some(reasoning) };
+            return ParsedOutput { actions, reasoning };
         }
         let text = blocks
             .iter()
@@ -798,14 +806,17 @@ impl WireFormat for MessagesWireFormat {
             .filter_map(|block| block["text"].as_str())
             .collect::<Vec<_>>()
             .join("");
-        parse_content_completion(&text)
-            .map(|payload| {
-                vec![ModelAction::CompletionRequest {
+        if let Some(payload) = parse_content_completion(&text) {
+            ParsedOutput {
+                actions: vec![ModelAction::CompletionRequest {
                     action_id: "completion".into(),
                     payload,
-                }]
-            })
-            .unwrap_or_default()
+                }],
+                reasoning: None,
+            }
+        } else {
+            ParsedOutput { actions: vec![], reasoning: None }
+        }
     }
 
     fn normalize_usage(&self, response: &Value) -> UsageRecord {
