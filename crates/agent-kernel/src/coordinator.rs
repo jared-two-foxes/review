@@ -658,7 +658,8 @@ fn compact_history(history: &mut Vec<ConversationMessage>) {
                 }
                 let original_len = content.len();
                 *content = format!(
-                    "{}\n[truncated: {} more bytes - re-call this tool to see full content]",
+                    "{}
+[context-compacted: {} bytes trimmed from this earlier tool result to fit the context window. The full content was already received — do not re-call this tool unless you need the content again.]",
                     &content[..keep_end],
                     original_len.saturating_sub(keep_end)
                 );
@@ -723,14 +724,14 @@ mod tests {
 
         // Old messages (before preserved zone) should be truncated.
         assert!(
-            matches!(&history[0], ConversationMessage::Tool { content, .. } if content.contains("[truncated:"))
+            matches!(&history[0], ConversationMessage::Tool { content, .. } if content.contains("[context-compacted:"))
         );
         assert!(
-            matches!(&history[1], ConversationMessage::Tool { content, .. } if content.contains("[truncated:"))
+            matches!(&history[1], ConversationMessage::Tool { content, .. } if content.contains("[context-compacted:"))
         );
         // Recent message (within preserved zone) should be unchanged.
         assert!(
-            matches!(&history[10], ConversationMessage::Tool { content, .. } if content.len() == 5_000 && !content.contains("[truncated:"))
+            matches!(&history[10], ConversationMessage::Tool { content, .. } if content.len() == 5_000 && !content.contains("[context-compacted:"))
         );
     }
 
@@ -765,11 +766,11 @@ mod tests {
         );
         // Large old result should be truncated.
         assert!(
-            matches!(&history[1], ConversationMessage::Tool { content, .. } if content.contains("[truncated:"))
+            matches!(&history[1], ConversationMessage::Tool { content, .. } if content.contains("[context-compacted:"))
         );
         // Recent message should be unchanged.
         assert!(
-            matches!(&history[10], ConversationMessage::Tool { content, .. } if content.len() == 10_000 && !content.contains("[truncated:"))
+            matches!(&history[10], ConversationMessage::Tool { content, .. } if content.len() == 10_000 && !content.contains("[context-compacted:"))
         );
     }
 
@@ -792,7 +793,7 @@ mod tests {
 
         // Deduplicated result should not be double-truncated.
         assert!(
-            matches!(&history[0], ConversationMessage::Tool { content, .. } if !content.contains("[truncated:"))
+            matches!(&history[0], ConversationMessage::Tool { content, .. } if !content.contains("[context-compacted:"))
         );
     }
 
@@ -838,7 +839,7 @@ mod tests {
         compact_history(&mut history);
 
         if let ConversationMessage::Tool { content, .. } = &history[0] {
-            let kept = content.split("\n[truncated:").next().unwrap();
+            let kept = content.split("\n[context-compacted:").next().unwrap();
             assert!(
                 kept.len() <= TRUNCATION_KEEP_BYTES,
                 "kept {} bytes, expected at most {}",
