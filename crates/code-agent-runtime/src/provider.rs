@@ -356,10 +356,15 @@ fn parse_content_completion(content: &str) -> Option<Value> {
     None
 }
 
+struct ParsedOutput {
+    actions: Vec<ModelAction>,
+    reasoning: Option<String>,
+}
+
 trait WireFormat: Send + Sync {
     fn endpoint_suffix(&self) -> &'static str;
     fn serialize_request(&self, request: &CanonicalModelRequest, model: &str) -> Value;
-    fn parse_response(&self, response: &Value) -> Vec<ModelAction>;
+    fn parse_response(&self, response: &Value) -> ParsedOutput;
     fn normalize_usage(&self, response: &Value) -> UsageRecord;
 }
 
@@ -451,10 +456,10 @@ impl WireFormat for ChatCompletionsWireFormat {
         })
     }
 
-    fn parse_response(&self, response: &Value) -> Vec<ModelAction> {
+    fn parse_response(&self, response: &Value) -> ParsedOutput {
         let choice = response["choices"].get(0);
         if let Some(calls) = choice.and_then(|c| c["message"]["tool_calls"].as_array()) {
-            calls
+            let actions = calls
                 .iter()
                 .filter_map(|call| {
                     let id = call["id"].as_str()?;
@@ -474,18 +479,26 @@ impl WireFormat for ChatCompletionsWireFormat {
                         arguments: args,
                     })
                 })
-                .collect()
+                .collect();
+            let reasoning = choice
+                .and_then(|c| c["message"]["content"].as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            ParsedOutput { actions, reasoning }
         } else if let Some(content) = choice.and_then(|c| c["message"]["content"].as_str()) {
             if let Some(payload) = parse_content_completion(content) {
-                vec![ModelAction::CompletionRequest {
-                    action_id: "completion".into(),
-                    payload,
-                }]
+                ParsedOutput {
+                    actions: vec![ModelAction::CompletionRequest {
+                        action_id: "completion".into(),
+                        payload,
+                    }],
+                    reasoning: None,
+                }
             } else {
-                vec![]
+                ParsedOutput { actions: vec![], reasoning: None }
             }
         } else {
-            vec![]
+            ParsedOutput { actions: vec![], reasoning: None }
         }
     }
 
@@ -583,13 +596,13 @@ impl WireFormat for ResponsesWireFormat {
         })
     }
 
-    fn parse_response(&self, response: &Value) -> Vec<ModelAction> {
+    fn parse_response(&self, response: &Value) -> ParsedOutput {
         let output = match response["output"].as_array() {
             Some(arr) => arr,
-            None => return vec![],
+            None => return ParsedOutput { actions: vec![], reasoning: None },
         };
 
-        let tool_calls: Vec<ModelAction> = output
+        let actions: Vec<ModelAction> = output
             .iter()
             .filter(|item| item["type"].as_str() == Some("function_call"))
             .filter_map(|item| {
@@ -612,33 +625,41 @@ impl WireFormat for ResponsesWireFormat {
             })
             .collect();
 
-        if !tool_calls.is_empty() {
-            return tool_calls;
+        let reasoning: Option<String> = {
+            let text: String = output
+                .iter()
+                .filter(|item| item["type"].as_str() == Some("message"))
+                .filter_map(|item| item["content"].as_array())
+                .flatten()
+                .filter_map(|part| {
+                    if part["type"].as_str() == Some("output_text") {
+                        part["text"].as_str().map(String::from)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            if text.is_empty() { None } else { Some(text) }
+        };
+
+        if !actions.is_empty() {
+            return ParsedOutput { actions, reasoning };
         }
 
-        let text: String = output
-            .iter()
-            .filter(|item| item["type"].as_str() == Some("message"))
-            .filter_map(|item| item["content"].as_array())
-            .flatten()
-            .filter_map(|part| {
-                if part["type"].as_str() == Some("output_text") {
-                    part["text"].as_str().map(String::from)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        if let Some(payload) = parse_content_completion(&text) {
-            vec![ModelAction::CompletionRequest {
-                action_id: "completion".into(),
-                payload,
-            }]
-        } else {
-            vec![]
+        if let Some(text) = reasoning.as_deref() {
+            if let Some(payload) = parse_content_completion(text) {
+                return ParsedOutput {
+                    actions: vec![ModelAction::CompletionRequest {
+                        action_id: "completion".into(),
+                        payload,
+                    }],
+                    reasoning: None,
+                };
+            }
         }
+
+        ParsedOutput { actions: vec![], reasoning: None }
     }
 
     fn normalize_usage(&self, response: &Value) -> UsageRecord {
@@ -746,19 +767,19 @@ impl WireFormat for MessagesWireFormat {
         body
     }
 
-    fn parse_response(&self, response: &Value) -> Vec<ModelAction> {
+    fn parse_response(&self, response: &Value) -> ParsedOutput {
         // Never accept a truncated or refused review, even if its text parses as JSON.
         if matches!(
             response["stop_reason"].as_str(),
             Some("max_tokens" | "model_context_window_exceeded" | "refusal")
         ) {
-            return vec![];
+            return ParsedOutput { actions: vec![], reasoning: None };
         }
         let Some(blocks) = response["content"].as_array() else {
-            return vec![];
+            return ParsedOutput { actions: vec![], reasoning: None };
         };
         if blocks.iter().any(|block| block["type"] == "tool_use") {
-            return blocks
+            let actions = blocks
                 .iter()
                 .filter(|block| block["type"] == "tool_use")
                 .filter_map(|block| {
@@ -770,6 +791,14 @@ impl WireFormat for MessagesWireFormat {
                     })
                 })
                 .collect();
+            let reasoning = blocks
+                .iter()
+                .filter(|block| block["type"] == "text")
+                .filter_map(|block| block["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("");
+            let reasoning = if reasoning.is_empty() { None } else { Some(reasoning) };
+            return ParsedOutput { actions, reasoning };
         }
         let text = blocks
             .iter()
@@ -777,14 +806,17 @@ impl WireFormat for MessagesWireFormat {
             .filter_map(|block| block["text"].as_str())
             .collect::<Vec<_>>()
             .join("");
-        parse_content_completion(&text)
-            .map(|payload| {
-                vec![ModelAction::CompletionRequest {
+        if let Some(payload) = parse_content_completion(&text) {
+            ParsedOutput {
+                actions: vec![ModelAction::CompletionRequest {
                     action_id: "completion".into(),
                     payload,
-                }]
-            })
-            .unwrap_or_default()
+                }],
+                reasoning: None,
+            }
+        } else {
+            ParsedOutput { actions: vec![], reasoning: None }
+        }
     }
 
     fn normalize_usage(&self, response: &Value) -> UsageRecord {
@@ -886,12 +918,13 @@ impl OpenAiProvider {
             .json()
             .map_err(|e| ModelError::ApiError(e.to_string()))?;
 
-        let actions = self.wire_format.parse_response(&response);
+        let parsed = self.wire_format.parse_response(&response);
         let usage = self.wire_format.normalize_usage(&response);
 
         Ok(CanonicalModelResponse {
-            actions,
+            actions: parsed.actions,
             usage: Some(usage),
+            reasoning: parsed.reasoning,
         })
     }
 

@@ -217,6 +217,7 @@ fn scripted_second_consumer_reaches_candidate_ready() {
                 arguments: json!({"path": "src/app.txt"}),
             }],
             usage: scripted_usage(),
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
@@ -229,6 +230,7 @@ fn scripted_second_consumer_reaches_candidate_ready() {
                 }),
             }],
             usage: scripted_usage(),
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
@@ -237,6 +239,7 @@ fn scripted_second_consumer_reaches_candidate_ready() {
                 arguments: json!({"path": "src/app.txt"}),
             }],
             usage: scripted_usage(),
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
@@ -247,6 +250,7 @@ fn scripted_second_consumer_reaches_candidate_ready() {
                 }),
             }],
             usage: scripted_usage(),
+            reasoning: None,
         },
     ]);
 
@@ -340,6 +344,7 @@ fn temporary_repository_flow_applies_bounded_mutation() {
                 arguments: json!({"path": "src/app.txt"}),
             }],
             usage: scripted_usage(),
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
@@ -352,6 +357,7 @@ fn temporary_repository_flow_applies_bounded_mutation() {
                 }),
             }],
             usage: scripted_usage(),
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
@@ -360,6 +366,7 @@ fn temporary_repository_flow_applies_bounded_mutation() {
                 arguments: json!({"path": "src/app.txt"}),
             }],
             usage: scripted_usage(),
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
@@ -370,6 +377,7 @@ fn temporary_repository_flow_applies_bounded_mutation() {
                 }),
             }],
             usage: scripted_usage(),
+            reasoning: None,
         },
     ]);
 
@@ -450,6 +458,7 @@ fn run_implement_includes_project_guidance_in_initial_context() {
                     arguments: json!({"path": "src/app.txt"}),
                 }],
                 usage: scripted_usage(),
+                reasoning: None,
             },
             CanonicalModelResponse {
                 actions: vec![ModelAction::ToolCall {
@@ -462,6 +471,7 @@ fn run_implement_includes_project_guidance_in_initial_context() {
                     }),
                 }],
                 usage: scripted_usage(),
+                reasoning: None,
             },
             CanonicalModelResponse {
                 actions: vec![ModelAction::ToolCall {
@@ -470,6 +480,7 @@ fn run_implement_includes_project_guidance_in_initial_context() {
                     arguments: json!({"path": "src/app.txt"}),
                 }],
                 usage: scripted_usage(),
+                reasoning: None,
             },
             CanonicalModelResponse {
                 actions: vec![ModelAction::CompletionRequest {
@@ -480,6 +491,7 @@ fn run_implement_includes_project_guidance_in_initial_context() {
                     }),
                 }],
                 usage: scripted_usage(),
+                reasoning: None,
             },
         ],
         Arc::clone(&captured_contexts),
