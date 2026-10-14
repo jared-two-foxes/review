@@ -320,6 +320,7 @@ fn evaluates_each_seeded_repository_with_scripted_provider() {
                 output_tokens: 1,
                 estimated_cost_usd: None,
             }),
+            reasoning: None,
         }];
         for (i, (path, _)) in fixture.head.iter().enumerate() {
             responses.push(CanonicalModelResponse {
@@ -333,6 +334,7 @@ fn evaluates_each_seeded_repository_with_scripted_provider() {
                     output_tokens: 1,
                     estimated_cost_usd: None,
                 }),
+                reasoning: None,
             });
         }
         responses.push(CanonicalModelResponse {
@@ -345,6 +347,7 @@ fn evaluates_each_seeded_repository_with_scripted_provider() {
                 output_tokens: 1,
                 estimated_cost_usd: None,
             }),
+            reasoning: None,
         });
         let provider = ScriptedModelProvider::new(responses);
 

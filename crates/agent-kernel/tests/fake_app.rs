@@ -331,6 +331,7 @@ fn happy_path_tool_call_then_completion() {
                 arguments: serde_json::json!({}),
             }],
             usage: None,
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
@@ -338,6 +339,7 @@ fn happy_path_tool_call_then_completion() {
                 payload: serde_json::json!({}),
             }],
             usage: None,
+            reasoning: None,
         },
     ]);
 
@@ -356,6 +358,7 @@ fn premature_completion_rejected_then_succeeds() {
                 payload: serde_json::json!({}),
             }],
             usage: None,
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
@@ -364,6 +367,7 @@ fn premature_completion_rejected_then_succeeds() {
                 arguments: serde_json::json!({}),
             }],
             usage: None,
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
@@ -371,6 +375,7 @@ fn premature_completion_rejected_then_succeeds() {
                 payload: serde_json::json!({}),
             }],
             usage: None,
+            reasoning: None,
         },
     ]);
 
@@ -390,6 +395,7 @@ fn unknown_tool_rejected() {
                 arguments: serde_json::json!({}),
             }],
             usage: None,
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![
@@ -404,6 +410,7 @@ fn unknown_tool_rejected() {
                 },
             ],
             usage: None,
+            reasoning: None,
         },
     ]);
 
@@ -423,6 +430,7 @@ fn malformed_arguments_rejected() {
                 arguments: serde_json::json!("not-an-object"),
             }],
             usage: None,
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![
@@ -437,6 +445,7 @@ fn malformed_arguments_rejected() {
                 },
             ],
             usage: None,
+            reasoning: None,
         },
     ]);
 
@@ -519,6 +528,7 @@ fn tool_result_is_fed_back_into_next_model_request() {
                     arguments: json!({"marker": "tool-output-marker"}),
                 }],
                 usage: None,
+                reasoning: None,
             },
             CanonicalModelResponse {
                 actions: vec![ModelAction::CompletionRequest {
@@ -526,6 +536,7 @@ fn tool_result_is_fed_back_into_next_model_request() {
                     payload: json!({}),
                 }],
                 usage: None,
+                reasoning: None,
             },
         ],
         index: 0,
@@ -562,6 +573,7 @@ fn rejection_and_richer_feedback_are_fed_back_into_next_model_request() {
                     arguments: json!({"marker": "ok"}),
                 }],
                 usage: None,
+                reasoning: None,
             },
             CanonicalModelResponse {
                 actions: vec![ModelAction::ToolCall {
@@ -570,6 +582,7 @@ fn rejection_and_richer_feedback_are_fed_back_into_next_model_request() {
                     arguments: json!({}),
                 }],
                 usage: None,
+                reasoning: None,
             },
             CanonicalModelResponse {
                 actions: vec![ModelAction::CompletionRequest {
@@ -577,6 +590,7 @@ fn rejection_and_richer_feedback_are_fed_back_into_next_model_request() {
                     payload: json!({}),
                 }],
                 usage: None,
+                reasoning: None,
             },
         ],
         index: 0,
@@ -619,6 +633,7 @@ fn untrusted_label_appears_in_tool_result_feedback() {
                     arguments: json!({"data": "repo-content"}),
                 }],
                 usage: None,
+                reasoning: None,
             },
             CanonicalModelResponse {
                 actions: vec![ModelAction::CompletionRequest {
@@ -626,6 +641,7 @@ fn untrusted_label_appears_in_tool_result_feedback() {
                     payload: json!({}),
                 }],
                 usage: None,
+                reasoning: None,
             },
         ],
         index: 0,
@@ -656,6 +672,7 @@ fn rejected_tool_result_is_labeled_as_untrusted_repository_content() {
                     arguments: json!({}),
                 }],
                 usage: None,
+                reasoning: None,
             },
             CanonicalModelResponse {
                 actions: vec![ModelAction::ToolCall {
@@ -664,6 +681,7 @@ fn rejected_tool_result_is_labeled_as_untrusted_repository_content() {
                     arguments: json!({}),
                 }],
                 usage: None,
+                reasoning: None,
             },
             CanonicalModelResponse {
                 actions: vec![ModelAction::CompletionRequest {
@@ -671,6 +689,7 @@ fn rejected_tool_result_is_labeled_as_untrusted_repository_content() {
                     payload: json!({}),
                 }],
                 usage: None,
+                reasoning: None,
             },
         ],
         index: 0,
@@ -761,6 +780,7 @@ fn usage_budget_exhaustion_terminates_before_model_completion() {
                         arguments: json!({}),
                     }],
                     usage: Some(usages[0].clone()),
+                    reasoning: None,
                 },
                 CanonicalModelResponse {
                     actions: vec![ModelAction::ToolCall {
@@ -769,6 +789,7 @@ fn usage_budget_exhaustion_terminates_before_model_completion() {
                         arguments: json!({}),
                     }],
                     usage: Some(usages[1].clone()),
+                    reasoning: None,
                 },
                 // If the coordinator ignores the accumulated budget, it will
                 // dispatch this completion request.  The budget check must stop
@@ -779,6 +800,7 @@ fn usage_budget_exhaustion_terminates_before_model_completion() {
                         payload: json!({}),
                     }],
                     usage: None,
+                    reasoning: None,
                 },
             ],
             Rc::clone(&model_calls),
@@ -847,6 +869,7 @@ fn cancellation_produces_exactly_one_terminal_state() {
             arguments: json!({}),
         }],
         usage: None,
+        reasoning: None,
     }]);
 
     let limits = Limits {

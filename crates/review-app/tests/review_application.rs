@@ -164,6 +164,7 @@ fn read_change_then_completion_no_findings_produces_approved() {
                 arguments: json!({}),
             }],
             usage: None,
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
@@ -171,6 +172,7 @@ fn read_change_then_completion_no_findings_produces_approved() {
                 payload: json!({"findings": []}),
             }],
             usage: None,
+            reasoning: None,
         },
     ]);
 
@@ -186,6 +188,7 @@ fn premature_completion_rejected_then_approved() {
                 payload: json!({"findings": []}),
             }],
             usage: None,
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
@@ -194,6 +197,7 @@ fn premature_completion_rejected_then_approved() {
                 arguments: json!({}),
             }],
             usage: None,
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
@@ -201,6 +205,7 @@ fn premature_completion_rejected_then_approved() {
                 payload: json!({"findings": []}),
             }],
             usage: None,
+            reasoning: None,
         },
     ]);
 
@@ -217,6 +222,7 @@ fn blocking_finding_produces_changes_requested() {
                 arguments: json!({}),
             }],
             usage: None,
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
@@ -227,6 +233,7 @@ fn blocking_finding_produces_changes_requested() {
                 }),
             }],
             usage: None,
+            reasoning: None,
         },
     ]);
 
@@ -243,6 +250,7 @@ fn review_application_constructible_with_production_clock_and_id_generator() {
                 arguments: json!({}),
             }],
             usage: None,
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
@@ -250,6 +258,7 @@ fn review_application_constructible_with_production_clock_and_id_generator() {
                 payload: json!({"findings": []}),
             }],
             usage: None,
+            reasoning: None,
         },
     ]);
     let mut catalog = ToolCatalog::new();
@@ -376,6 +385,7 @@ fn accepted_completion_findings_are_included_in_review_result() {
                 arguments: json!({}),
             }],
             usage: None,
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
@@ -384,6 +394,7 @@ fn accepted_completion_findings_are_included_in_review_result() {
                 arguments: json!({"path": "src/main.rs"}),
             }],
             usage: None,
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
@@ -400,6 +411,7 @@ fn accepted_completion_findings_are_included_in_review_result() {
                 }),
             }],
             usage: None,
+            reasoning: None,
         },
     ]);
 
@@ -474,6 +486,7 @@ fn run_review_includes_project_guidance_in_initial_context() {
                     arguments: json!({}),
                 }],
                 usage: None,
+                reasoning: None,
             },
             CanonicalModelResponse {
                 actions: vec![ModelAction::ToolCall {
@@ -482,6 +495,7 @@ fn run_review_includes_project_guidance_in_initial_context() {
                     arguments: json!({}),
                 }],
                 usage: None,
+                reasoning: None,
             },
             CanonicalModelResponse {
                 actions: vec![ModelAction::ToolCall {
@@ -490,6 +504,7 @@ fn run_review_includes_project_guidance_in_initial_context() {
                     arguments: json!({"path": "src/main.rs"}),
                 }],
                 usage: None,
+                reasoning: None,
             },
             CanonicalModelResponse {
                 actions: vec![ModelAction::CompletionRequest {
@@ -506,6 +521,7 @@ fn run_review_includes_project_guidance_in_initial_context() {
                     }),
                 }],
                 usage: None,
+                reasoning: None,
             },
         ],
         Arc::clone(&captured_contexts),

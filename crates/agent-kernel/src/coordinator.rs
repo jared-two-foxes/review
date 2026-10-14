@@ -209,7 +209,13 @@ where
             }
 
             tracing::info!(turn, "model completed");
-            self.append_event(&session_id, turn, "", "kernel.model_completed");
+            self.append_event_with_details(
+                &session_id,
+                turn,
+                "",
+                "kernel.model_completed",
+                response.reasoning.clone(),
+            );
 
             // Record the assistant's actions in conversation history.
             let tool_calls: Vec<ToolCallRecord> = response
@@ -235,9 +241,10 @@ where
                     }
                     _ => None,
                 });
+            let assistant_content = completion_content.clone().or_else(|| response.reasoning.clone());
             if !tool_calls.is_empty() || completion_content.is_some() {
                 history.push(ConversationMessage::Assistant {
-                    content: completion_content,
+                    content: assistant_content,
                     tool_calls,
                 });
             }

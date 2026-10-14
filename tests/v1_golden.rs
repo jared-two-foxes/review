@@ -114,6 +114,7 @@ fn scenario_1_golden_match() {
                 output_tokens: 4,
                 estimated_cost_usd: Some(0.01),
             }),
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
@@ -125,6 +126,7 @@ fn scenario_1_golden_match() {
                 output_tokens: 8,
                 estimated_cost_usd: Some(0.02),
             }),
+            reasoning: None,
         },
     ]);
     let (result, events) = SessionCoordinator::new(
@@ -157,6 +159,7 @@ fn scenario_2_golden_match() {
                 output_tokens: 2,
                 estimated_cost_usd: Some(0.1),
             }),
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::ToolCall {
@@ -169,6 +172,7 @@ fn scenario_2_golden_match() {
                 output_tokens: 4,
                 estimated_cost_usd: Some(0.2),
             }),
+            reasoning: None,
         },
         CanonicalModelResponse {
             actions: vec![ModelAction::CompletionRequest {
@@ -180,6 +184,7 @@ fn scenario_2_golden_match() {
                 output_tokens: 6,
                 estimated_cost_usd: Some(0.3),
             }),
+            reasoning: None,
         },
     ]);
     let (result, events) = SessionCoordinator::new(
@@ -216,6 +221,7 @@ fn scenario_3_golden_match() {
             output_tokens: 9,
             estimated_cost_usd: Some(0.7),
         }),
+        reasoning: None,
     }]);
     let (result, events) = SessionCoordinator::new(
         ReviewApplication::new_with_sources(clock, app_ids),
@@ -247,6 +253,7 @@ fn scenario_4_golden_match() {
             output_tokens: 13,
             estimated_cost_usd: Some(0.11),
         }),
+        reasoning: None,
     }]);
     let (result, events) = SessionCoordinator::new(
         ReviewApplication::new_with_sources(clock, app_ids),

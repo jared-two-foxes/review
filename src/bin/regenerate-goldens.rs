@@ -153,6 +153,7 @@ fn main() {
                     arguments: json!({}),
                 }],
                 usage: usage(10, 4, 0.01),
+                reasoning: None,
             },
             CanonicalModelResponse {
                 actions: vec![ModelAction::CompletionRequest {
@@ -160,6 +161,7 @@ fn main() {
                     payload: json!({"findings": []}),
                 }],
                 usage: usage(20, 8, 0.02),
+                reasoning: None,
             },
         ],
         10,
@@ -176,6 +178,7 @@ fn main() {
                     payload: json!({"findings": []}),
                 }],
                 usage: usage(1, 2, 0.1),
+                reasoning: None,
             },
             CanonicalModelResponse {
                 actions: vec![ModelAction::ToolCall {
@@ -184,6 +187,7 @@ fn main() {
                     arguments: json!({}),
                 }],
                 usage: usage(3, 4, 0.2),
+                reasoning: None,
             },
             CanonicalModelResponse {
                 actions: vec![ModelAction::CompletionRequest {
@@ -191,6 +195,7 @@ fn main() {
                     payload: json!({"findings": []}),
                 }],
                 usage: usage(5, 6, 0.3),
+                reasoning: None,
             },
         ],
         10,
@@ -207,6 +212,7 @@ fn main() {
                 arguments: json!({}),
             }],
             usage: usage(7, 9, 0.7),
+            reasoning: None,
         }],
         1,
         vec!["ses-001", "exec-001"],
@@ -222,6 +228,7 @@ fn main() {
                 arguments: json!("not-an-object"),
             }],
             usage: usage(11, 13, 0.11),
+            reasoning: None,
         }],
         1,
         vec!["ses-001", "exec-001"],

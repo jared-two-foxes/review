@@ -829,3 +829,55 @@ fn openai_provider_parses_content_completion_into_completion_request() {
         other => panic!("expected a completion request, got {other:?}"),
     }
 }
+
+#[test]
+fn openai_provider_captures_reasoning_coext_alongside_tool_calls() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind co-text provider");
+    let address = listener.local_addr().expect("co-text provider address");
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept co-text provider");
+        let mut request = [0_u8; 4096];
+        let _ = stream.read(&mut request);
+        // Response with both message.content (reasoning) AND tool_calls.
+        let response = r#"{"id":"r","model":"test-model","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"Let me check the changed files first.","tool_calls":[{"id":"c1","type":"function","function":{"name":"get_changed_files","arguments":"{}"}}]}}]}"#;
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response.len(),
+            response
+        );
+        stream
+            .write_all(reply.as_bytes())
+            .expect("send co-text response");
+    });
+
+    let request = CanonicalModelRequest {
+        instructions: vec![],
+        context: vec![],
+        tools: vec![],
+        history: vec![],
+    };
+    let mut provider = OpenAiProvider::new(ProviderRoute {
+        provider_root: format!("http://{address}/v1/"),
+        provider: "openai".into(),
+        api_key: "test-api-key".into(),
+        model: "test-model".into(),
+        api_style: ApiStyle::ChatCompletions,
+    });
+    let response = provider
+        .generate(&request)
+        .expect("generate should succeed");
+    server.join().expect("co-text server thread");
+
+    assert_eq!(
+        response.reasoning.as_deref(),
+        Some("Let me check the changed files first."),
+        "reasoning co-text must be captured when present alongside tool calls"
+    );
+    assert_eq!(response.actions.len(), 1, "tool call must still be captured");
+    match &response.actions[0] {
+        ModelAction::ToolCall { tool, .. } => {
+            assert_eq!(tool, "get_changed_files");
+        }
+        other => panic!("expected a tool call, got {other:?}"),
+    }
+}

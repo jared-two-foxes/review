@@ -87,6 +87,7 @@ pub enum ModelAction {
 pub struct CanonicalModelResponse {
     pub actions: Vec<ModelAction>,
     pub usage: Option<UsageRecord>,
+    pub reasoning: Option<String>,
 }
 
 impl CanonicalModelResponse {
