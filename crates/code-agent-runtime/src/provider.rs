@@ -481,7 +481,8 @@ impl WireFormat for ChatCompletionsWireFormat {
                 })
                 .collect();
             let reasoning = choice
-                .and_then(|c| c["message"]["content"].as_str())
+                .and_then(|c| c["message"]["reasoning_content"].as_str())
+                .or_else(|| choice.and_then(|c| c["message"]["content"].as_str()))
                 .filter(|s| !s.is_empty())
                 .map(String::from);
             ParsedOutput { actions, reasoning }
@@ -626,20 +627,39 @@ impl WireFormat for ResponsesWireFormat {
             .collect();
 
         let reasoning: Option<String> = {
-            let text: String = output
-                .iter()
-                .filter(|item| item["type"].as_str() == Some("message"))
-                .filter_map(|item| item["content"].as_array())
-                .flatten()
-                .filter_map(|part| {
-                    if part["type"].as_str() == Some("output_text") {
-                        part["text"].as_str().map(String::from)
-                    } else {
-                        None
+            // Capture reasoning from reasoning items (internal reasoning summaries)
+            // and message items (text output alongside tool calls).
+            let mut parts: Vec<String> = Vec::new();
+            for item in output {
+                match item["type"].as_str() {
+                    Some("reasoning") => {
+                        if let Some(summary) = item["summary"].as_array() {
+                            for s in summary {
+                                if let Some(text) = s["text"].as_str() {
+                                    if !text.is_empty() {
+                                        parts.push(text.to_string());
+                                    }
+                                }
+                            }
+                        }
                     }
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
+                    Some("message") => {
+                        if let Some(content) = item["content"].as_array() {
+                            for part in content {
+                                if part["type"].as_str() == Some("output_text") {
+                                    if let Some(text) = part["text"].as_str() {
+                                        if !text.is_empty() {
+                                            parts.push(text.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let text = parts.join(" ");
             if text.is_empty() { None } else { Some(text) }
         };
 
@@ -793,10 +813,13 @@ impl WireFormat for MessagesWireFormat {
                 .collect();
             let reasoning = blocks
                 .iter()
-                .filter(|block| block["type"] == "text")
-                .filter_map(|block| block["text"].as_str())
+                .filter(|block| block["type"] == "thinking" || block["type"] == "text")
+                .filter_map(|block| {
+                    block["thinking"].as_str()
+                        .or_else(|| block["text"].as_str())
+                })
                 .collect::<Vec<_>>()
-                .join("");
+                .join(" ");
             let reasoning = if reasoning.is_empty() { None } else { Some(reasoning) };
             return ParsedOutput { actions, reasoning };
         }
