@@ -30,6 +30,9 @@ fn probe(response: Value, status: u16) -> (String, thread::JoinHandle<(String, V
             }
         };
         stream
+            .set_nonblocking(false)
+            .expect("configure blocking probe connection");
+        stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
         let mut bytes = Vec::new();
