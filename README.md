@@ -118,6 +118,14 @@ The `implement-cli` binary follows the same provider-routing model and runtime f
 - a JSON request file via `--request`
 - or demo-style request construction via flags like `--repository`, `--target-path`, `--expected-content`, and `--desired-content`
 
+### Bounded inspection evidence
+
+Both agents receive guidance to use optional 1-based `offset` and line-count `limit` for localized reads and smaller retries after byte truncation. Review also supports file-scoped searches. Ledger summaries preserve requested ranges and distinguish file, file-range, repository, and per-file repository-line-range scopes. Complete results describe only the requested scope; empty reads do not establish path inspection, while nonempty ranged reads and diffs remain valid exploration without requiring whole-file reads. Full-file read evidence is tracked separately.
+
+The existing absence-phrase gate conservatively rejects absence claims while any literal query has unresolved scoped-search evidence. A successful complete repository-wide unbounded search for that same query resolves its scope limitation, not other queries or existing sticky truncated-search protection. This is not semantic claim-to-query matching and does not bypass the other review gates or repository visibility rules.
+
+`implement-cli` still exposes no `search_text`: replacement preconditions and replacement text remain full-file values, and readiness verification uses full-file `content_id` even after a ranged read. Scripted production-application regressions establish schema/argument wiring, evidence behavior, and mutation safeguards; they do not demonstrate autonomous model adoption, fewer calls, or token savings. Those require a separate live-model evaluation.
+
 ## Example usage
 
 Install the two CLIs directly with `cargo install`:

@@ -1,5 +1,12 @@
 // Application scaffolding for the end-to-end test.
 
+// Keep base and general-skill range guidance byte-for-byte consistent.
+macro_rules! range_aware_review_instruction {
+    ($base:literal) => {
+        concat!($base, " Prefer bounded read_file context around diff or search locations. offset is a 1-based starting line and limit counts file lines, not matches. Use search_text path when the file is known; omit path for repository discovery. If a read is byte-truncated, request a smaller line range rather than repeating the same full-file read; never advance by the requested limit when fewer lines were returned. Expand scope when needed. completeness describes only the requested scope: a partial read is not a full-file inspection, and a scoped search cannot establish repository-wide absence. Use complete unbounded same-query searches to support absence claims, while respecting existing ignore and security visibility.")
+    };
+}
+
 pub mod skills;
 
 use agent_kernel::application::{
@@ -36,7 +43,7 @@ use std::time::Duration;
 
 const LARGE_CHANGE_THRESHOLD: usize = 20;
 
-const REVIEW_BASE_INSTRUCTION: &str = "Review the code change in this repository. Before each tool call, briefly state what you are checking and why. Begin by calling get_change_summary to inspect the change and get_changed_files to enumerate every changed file, then call read_diff, read_file, list_directory, get_project_guidance, or search_text as needed. Use get_project_guidance on relevant paths to discover README/AGENTS guidance before deeper exploration. When you have enough information, issue a completion with your findings as a JSON object of the form {\"findings\":[{\"blocking\": <bool>, \"message\": \"<string>\", \"path\": <optional or null>, \"line\": <optional or null>, \"severity\": \"<high|medium|low>\", \"recommendation\": <optional or null>}]}. Include the required severity field on every finding, include path, line, and recommendation when applicable, and include every actionable issue you found. Do not return an empty findings array; identify the most relevant concrete observation from the inspected change.";
+const REVIEW_BASE_INSTRUCTION: &str = range_aware_review_instruction!("Review the code change in this repository. Before each tool call, briefly state what you are checking and why. Begin by calling get_change_summary to inspect the change and get_changed_files to enumerate every changed file, then call read_diff, read_file, list_directory, get_project_guidance, or search_text as needed. Use get_project_guidance on relevant paths to discover README/AGENTS guidance before deeper exploration. When you have enough information, issue a completion with your findings as a JSON object of the form {\"findings\":[{\"blocking\": <bool>, \"message\": \"<string>\", \"path\": <optional or null>, \"line\": <optional or null>, \"severity\": \"<high|medium|low>\", \"recommendation\": <optional or null>}]}. Include the required severity field on every finding, include path, line, and recommendation when applicable, and include every actionable issue you found. Do not return an empty findings array; identify the most relevant concrete observation from the inspected change.");
 
 pub struct ReviewConfig {
     pub model: String,
