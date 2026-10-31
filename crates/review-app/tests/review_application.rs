@@ -669,8 +669,17 @@ fn requirements_orientation_is_framed_as_data_for_analysis() {
             .iter()
             .filter(|message| message["role"] == "user")
             .count(),
-        2
+        3
     );
+    let inspection_evidence = messages.iter().find(|message| {
+        message["role"] == "user"
+            && message["content"].as_str().is_some_and(|content| {
+                content.starts_with("[untrusted inspection evidence data]")
+                    && content.contains("Full-file read paths: []")
+                    && content.contains("Unresolved scoped-search queries: []")
+            })
+    }).expect("inspection evidence must remain a separate untrusted user context block");
+    assert_ne!(inspection_evidence["content"], requirement_context["content"]);
     assert_ne!(
         requirement_context["content"],
         messages

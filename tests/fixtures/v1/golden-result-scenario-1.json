@@ -13,8 +13,8 @@
   "skills": [
     {
       "id": "general-implementation-review",
-      "version": "1.0.0",
-      "content_hash": "sha256:cbe4eca9506ce90f0df1663a95494872b941703835b1b5e09f1e087f1ce93e68"
+      "version": "1.1.0",
+      "content_hash": "sha256:876a631ce4db0537fc852dfc710fffdc11fdb62fc2670b9fa3ae35ca5c6d03e8"
     }
   ]
 }

@@ -1763,6 +1763,7 @@ dependencies = [
  "review-protocol",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
