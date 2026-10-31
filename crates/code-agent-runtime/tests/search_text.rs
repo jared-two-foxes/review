@@ -346,6 +346,69 @@ fn search_text_validates_optional_scope_and_advertises_schema() {
 }
 
 #[test]
+fn search_text_integer_representations_agree_with_schema_and_execution() {
+    let dir = make_repo_with_searchable_text();
+    for target in ["HEAD", ":staged", ":working"] {
+        let repo = GitRepo::open(dir.path()).unwrap();
+        let head = ReviewTarget::parse(&repo, target).unwrap();
+        let tool = SearchTextTool::new(repo, head, SecurityPolicy::default());
+        let validator = jsonschema::validator_for(&tool.description().input_schema).unwrap();
+        for key in ["offset", "limit"] {
+            for (literal, integer) in [
+                ("1.0", 1_u64),
+                ("1e0", 1),
+                ("3.0", 3),
+                ("3e0", 3),
+                ("9007199254740992.0", 9007199254740992),
+                ("18446744073709549568.0", 18446744073709549568),
+                ("18446744073709551615", u64::MAX),
+            ] {
+                let mut args = json!({"query": "foo.bar", "path": "src/one.txt"});
+                args[key] = serde_json::from_str(literal).unwrap();
+                assert!(validator.is_valid(&args), "{target}: schema rejected {args}");
+                tool.validate_arguments(&args).unwrap();
+                let result = tool.execute(&args);
+                assert!(matches!(result.status, ToolStatus::Succeeded), "{args}");
+                let lines: Vec<u64> = match_locations(&result.value)
+                    .into_iter()
+                    .map(|(_, line)| line)
+                    .collect();
+                let expected_lines = match (key, integer) {
+                    ("offset", 1) => vec![1, 3],
+                    ("offset", 3) => vec![3],
+                    ("offset", _) => vec![],
+                    ("limit", 1) => vec![1],
+                    _ => vec![1, 3],
+                };
+                assert_eq!(lines, expected_lines, "{target}: {args}");
+                args[key] = json!(integer);
+                let native = tool.execute(&args);
+                assert!(matches!(native.status, ToolStatus::Succeeded));
+                assert_eq!(result.value, native.value, "{target}: {key}={literal}");
+            }
+            for literal in [
+                "0.0",
+                "-0.0",
+                "-1e0",
+                "0.5",
+                "1.5",
+                // The existing Value parser represents these as 2^64 or greater;
+                // accepting them via a saturating u64 cast would violate bounds.
+                "18446744073709551615.0",
+                "18446744073709551616.0",
+                "1.8446744073709552e19",
+            ] {
+                let mut args = json!({"query": "foo.bar", "path": "src/one.txt"});
+                args[key] = serde_json::from_str(literal).unwrap();
+                assert!(!validator.is_valid(&args), "{target}: schema accepted {args}");
+                assert!(tool.validate_arguments(&args).is_err(), "{target}: {args}");
+                assert!(matches!(tool.execute(&args).status, ToolStatus::Failed));
+            }
+        }
+    }
+}
+
+#[test]
 fn search_text_line_ranges_apply_to_all_targets() {
     let dir = make_repo_with_searchable_text();
     let cases = [

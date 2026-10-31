@@ -1065,6 +1065,18 @@ impl SearchScope<'_> {
     }
 }
 
+fn search_line_number(value: &Value) -> Option<u64> {
+    if let Some(number) = value.as_u64() {
+        return (number > 0).then_some(number);
+    }
+    // JSON Schema integers include whole-number floats such as 1.0 and 1e0.
+    // Check the represented value before casting: f64(u64::MAX) is 2^64,
+    // which must be excluded to avoid saturating an out-of-range number.
+    let number = value.as_f64()?;
+    (number >= 1.0 && number < 18446744073709551616.0 && number.fract() == 0.0)
+        .then(|| number as u64)
+}
+
 fn is_search_path(path: &str) -> bool {
     !path.contains(['\\', ':']) && path.split('/').all(|part| !matches!(part, "" | "." | ".."))
 }
@@ -1129,7 +1141,7 @@ impl Tool for SearchTextTool {
                 && ["offset", "limit"].iter().all(|key| {
                     object
                         .get(*key)
-                        .is_none_or(|value| value.as_u64().is_some_and(|number| number > 0))
+                        .is_none_or(|value| search_line_number(value).is_some())
                 })
         });
         if valid {
@@ -1148,8 +1160,8 @@ impl Tool for SearchTextTool {
         }
         let scope = SearchScope {
             path: arguments.get("path").and_then(Value::as_str),
-            offset: arguments.get("offset").and_then(Value::as_u64).unwrap_or(1),
-            limit: arguments.get("limit").and_then(Value::as_u64),
+            offset: arguments.get("offset").and_then(search_line_number).unwrap_or(1),
+            limit: arguments.get("limit").and_then(search_line_number),
         };
         if scope
             .path
