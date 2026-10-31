@@ -91,3 +91,62 @@ fn exercise(sliced_precondition: bool) {
 fn production_ranged_reads_and_full_file_mutation_reach_candidate_ready() { exercise(false); }
 #[test]
 fn production_sliced_precondition_cannot_mutate_or_reach_candidate_ready() { exercise(true); }
+
+#[test]
+fn production_empty_reads_require_full_file_empty_identity_for_inspection() {
+    for (name, before, after, inspection, ready) in [
+        ("past EOF of nonempty file", "one\nbefore\n", "one\nafter\n",
+            json!({"path": "a.txt", "offset": 999, "limit": 1}), false),
+        ("whole empty file", "", "after\n", json!({"path": "a.txt"}), true),
+        ("ranged genuinely empty file", "", "after\n",
+            json!({"path": "a.txt", "offset": 999, "limit": 1}), true),
+        ("empty desired file", "before\n", "",
+            json!({"path": "a.txt", "offset": 1, "limit": 1}), true),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new("git").current_dir(dir.path())
+            .args(["init", "-q"]).output().unwrap();
+        assert!(output.status.success());
+        std::fs::write(dir.path().join("a.txt"), before).unwrap();
+        let request = ImplementRequest {
+            repository_path: dir.path().to_str().unwrap().into(),
+            target_path: "a.txt".into(),
+            expected_content: before.into(), desired_content: after.into(),
+        };
+        let actions = vec![
+            call("inspect", "read_file", inspection),
+            call("mutate", "replace_file_content", json!({
+                "path": "a.txt", "expected": before, "replacement": after,
+            })),
+            call("verify", "read_file", json!({"path": "a.txt", "offset": 1, "limit": 1})),
+            ModelAction::CompletionRequest { action_id: "complete".into(),
+                payload: json!({"ready": true, "summary": "Requested full-file state reached."}) },
+        ];
+        let config = ImplementConfig { max_turns: actions.len() as u32, ..Default::default() };
+        let seen = Arc::new(Mutex::new(vec![]));
+        let (result, events) = run_implement_with_provider(&request, &config,
+            Probe { actions: actions.into(), seen: seen.clone() }, None).unwrap();
+        // Tool preconditions still govern mutation; the application separately rejects
+        // readiness if the model mutated without meaningful pre-mutation inspection.
+        assert!(result.applied, "{name}");
+        assert_eq!(result.verified, ready, "{name}");
+        assert_eq!(matches!(result.status, ImplementStatus::CandidateReady), ready, "{name}");
+        assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).unwrap(), after, "{name}");
+        let seen = seen.lock().unwrap();
+        let inspected = tool_value(&seen, "inspect");
+        assert_eq!(inspected["content_id"], content_id_for_bytes(before.as_bytes()), "{name}");
+        assert_eq!(inspected["completeness"], true, "{name}");
+        if before.is_empty() || !ready { assert_eq!(inspected["content"], "", "{name}"); }
+        assert_eq!(tool_value(&seen, "verify")["content_id"], content_id_for_bytes(after.as_bytes()), "{name}");
+        let metadata: Vec<Value> = events.iter().filter(|e| e.event_type == "kernel.tool_completed")
+            .map(|e| serde_json::from_str(e.details.as_deref().unwrap()).unwrap()).collect();
+        assert_eq!(metadata.len(), 3, "{name}");
+        assert_eq!(metadata[0]["has_content"], !before.is_empty() && ready, "{name}");
+        assert_eq!(metadata[1]["tool"], "replace_file_content", "{name}");
+        assert_eq!(metadata[1]["status"], "Succeeded", "{name}");
+        if !ready {
+            assert!(matches!(result.status, ImplementStatus::Indeterminate), "{name}");
+            assert_eq!(result.summary.as_deref(), Some("Ordering violation: mutation_applied_before_inspection"));
+        }
+    }
+}

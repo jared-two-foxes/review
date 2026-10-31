@@ -349,7 +349,16 @@ impl AgentApplication for ImplementApplication {
             let content_id = info["content_id"].as_str().unwrap_or_default();
 
             if path == state.target_path && tool == "read_file" && status == "Succeeded" {
-                if !state.mutation_applied {
+                // An empty slice beyond EOF is not inspection of a nonempty file.
+                // The full-file identity can, however, prove a genuinely empty file.
+                let has_content = info["has_content"].as_bool();
+                let proven_empty_file = has_content == Some(false)
+                    && info["completeness"].as_bool() == Some(true)
+                    && info["truncated"].as_bool() != Some(true)
+                    && content_id == content_id_for_bytes(b"");
+                if !state.mutation_applied
+                    && (has_content == Some(true) || proven_empty_file)
+                {
                     next.inspected = true;
                 }
                 if state.inspected
@@ -515,10 +524,85 @@ mod tests {
                     "path": path,
                     "status": status,
                     "content_id": content_id,
+                    "has_content": tool == "read_file",
                 })
                 .to_string(),
             ),
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn pre_mutation_inspection_requires_content_or_proven_empty_file() {
+        let empty_id = content_id_for_bytes(b"");
+        let before_id = content_id_for_bytes(b"before");
+        let after_id = content_id_for_bytes(b"after");
+        let valid = json!({
+            "tool": "read_file", "path": "src/app.txt", "status": "Succeeded",
+            "has_content": true, "content_id": before_id,
+            "scope": "file_range", "completeness": true, "truncated": false,
+        });
+        let mut empty = valid.clone();
+        empty["has_content"] = json!(false);
+        empty["content_id"] = json!(empty_id);
+        let mut cases = vec![("nonempty range", valid.clone(), true), ("proven empty", empty.clone(), true)];
+        for (name, key, value) in [
+            ("past EOF", "content_id", json!(before_id)),
+            ("incomplete empty", "completeness", json!(false)),
+            ("truncated empty", "truncated", json!(true)),
+            ("failed empty", "status", json!("Failed")),
+            ("denied empty", "status", json!("Denied")),
+            ("wrong path", "path", json!("other.txt")),
+            ("wrong tool", "tool", json!("get_project_guidance")),
+        ] {
+            let mut info = empty.clone();
+            info[key] = value;
+            cases.push((name, info, false));
+        }
+        for key in ["has_content", "completeness", "content_id"] {
+            let mut info = empty.clone();
+            info.as_object_mut().unwrap().remove(key);
+            cases.push((key, info, false));
+        }
+        let mut missing_nonempty = valid.clone();
+        missing_nonempty.as_object_mut().unwrap().remove("has_content");
+        cases.push(("missing nonempty metadata", missing_nonempty, false));
+        for status in ["Failed", "Denied"] {
+            let mut info = valid.clone();
+            info["status"] = json!(status);
+            cases.push((status, info, false));
+        }
+        for (name, info, expected_inspection) in cases {
+            let app = ImplementApplication::new_with_sources(
+                FixedClock::new("2025-01-01T00:00:00Z"),
+                SequenceIdGenerator::new(["impl-001"]),
+            );
+            let initial = app.initialize(&request()).unwrap().initial_state;
+            let read = LedgerEvent {
+                event_type: "kernel.tool_completed".into(),
+                details: Some(info.to_string()),
+                ..Default::default()
+            };
+            let inspected = app.reduce_event(&initial, &read);
+            assert_eq!(inspected.inspected, expected_inspection, "{name}");
+            let mutated = app.reduce_event(&inspected, &tool_completed_event(
+                "replace_file_content", "src/app.txt", "Succeeded", &after_id,
+            ));
+            let verified = app.reduce_event(&mutated, &tool_completed_event(
+                "read_file", "src/app.txt", "Succeeded", &after_id,
+            ));
+            assert_eq!(verified.inspected, expected_inspection, "{name}");
+            assert_eq!(verified.verified, expected_inspection, "{name}");
+            assert_eq!(verified.mutation_before_inspection, !expected_inspection, "{name}");
+            let decision = app.validate_completion(&verified, &ImplementCompletion {
+                ready: true, summary: "Updated the target".into(),
+            });
+            if expected_inspection {
+                assert!(matches!(decision, CompletionDecision::Accepted), "{name}");
+            } else {
+                assert!(matches!(decision, CompletionDecision::RejectedTerminal { ref reason }
+                    if reason == "mutation_applied_before_inspection"), "{name}");
+            }
         }
     }
 
