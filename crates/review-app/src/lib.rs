@@ -43,6 +43,16 @@ use std::time::Duration;
 
 const LARGE_CHANGE_THRESHOLD: usize = 20;
 
+// Presentation only: exact literal queries remain in state for evidence matching.
+fn scoped_query_preview(queries: &[String]) -> String {
+    let previews: Vec<_> = queries.iter().take(8).map(|query| {
+        let mut end = query.len().min(96);
+        while !query.is_char_boundary(end) { end -= 1; }
+        json!({"preview": &query[..end], "truncated": end < query.len()})
+    }).collect();
+    json!({"queries": previews, "omitted": queries.len().saturating_sub(8)}).to_string()
+}
+
 const REVIEW_BASE_INSTRUCTION: &str = range_aware_review_instruction!("Review the code change in this repository. Before each tool call, briefly state what you are checking and why. Begin by calling get_change_summary to inspect the change and get_changed_files to enumerate every changed file, then call read_diff, read_file, list_directory, get_project_guidance, or search_text as needed. Use get_project_guidance on relevant paths to discover README/AGENTS guidance before deeper exploration. When you have enough information, issue a completion with your findings as a JSON object of the form {\"findings\":[{\"blocking\": <bool>, \"message\": \"<string>\", \"path\": <optional or null>, \"line\": <optional or null>, \"severity\": \"<high|medium|low>\", \"recommendation\": <optional or null>}]}. Include the required severity field on every finding, include path, line, and recommendation when applicable, and include every actionable issue you found. Do not return an empty findings array; identify the most relevant concrete observation from the inspected change.");
 
 pub struct ReviewConfig {
@@ -419,8 +429,8 @@ impl ReviewApplication {
         });
 
         let evidence = format!(
-            "[untrusted inspection evidence data] Full-file read paths: {}. Other path exploration does not imply a full-file read. Unresolved scoped-search queries: {}.",
-            json!(state.full_file_read_paths), json!(state.scoped_search_queries)
+            "[untrusted inspection evidence data] Full-file read paths: {}. Other path exploration does not imply a full-file read. Unresolved scoped-search queries: {}. Display-only previews; recover exact literals from original tool arguments/history, never search a truncated preview.",
+            json!(state.full_file_read_paths), scoped_query_preview(&state.scoped_search_queries)
         );
         blocks.push(PriorityBlock {
             estimated_tokens: estimate_tokens(&evidence),
@@ -730,7 +740,7 @@ impl AgentApplication for ReviewApplication {
                         content: if state.has_truncated_search {
                             "One or more searches returned incomplete results.  Findings claiming something does not exist are not supported by a truncated search.  Re-run the search with a more specific query or remove the absence claim.".into()
                         } else {
-                            format!("Scoped completeness is not repository-wide evidence. Run each unresolved literal query without path, offset or limit and obtain complete results, or remove the absence claim. Unresolved queries: {}", json!(state.scoped_search_queries))
+                            format!("Scoped completeness is not repository-wide evidence. Run each unresolved literal query without path, offset or limit and obtain complete results, or remove the absence claim. Unresolved queries (display-only previews; recover exact literals from original tool arguments/history, never search a truncated preview): {}", scoped_query_preview(&state.scoped_search_queries))
                         },
                     }],
                 };
@@ -1007,6 +1017,46 @@ mod tests {
     fn scope_event(app: &ReviewApplication, state: &ReviewState, details: Value) -> ReviewState {
         app.reduce_event(state, &LedgerEvent { event_type: "kernel.tool_completed".into(),
             details: Some(details.to_string()), ..Default::default() })
+    }
+
+    #[test]
+    fn scoped_query_display_is_bounded_without_changing_literal_identity() {
+        let (app, initial) = scope_fixture();
+        let queries: Vec<String> = ["x".repeat(100_000), "é🦊".repeat(20_000), "\u{0}\n\"\\".repeat(25_000)].into_iter().cycle().take(30).collect();
+        let preview = scoped_query_preview(&queries);
+        assert!(preview.len() < 6_000);
+        let parsed: Value = serde_json::from_str(&preview).unwrap();
+        assert_eq!(parsed["omitted"], 22);
+        assert_eq!(parsed["queries"].as_array().unwrap().len(), 8);
+        for item in parsed["queries"].as_array().unwrap() {
+            assert!(item["preview"].as_str().unwrap().len() <= 96);
+            assert_eq!(item["truncated"], true);
+        }
+        let mut state = initial;
+        state.inspected = true;
+        state.scoped_search_queries = queries.clone();
+        let (_, context, _) = app.build_budgeted_context(&state);
+        let evidence = &context.last().unwrap().content;
+        assert!(evidence.len() < 7_000);
+        assert!(evidence.contains(&preview));
+        let completion = app.parse_completion(&json!({"findings":[{"blocking":false,"message":"symbol not found","severity":"low"}]})).unwrap();
+        match app.validate_completion(&state, &completion) {
+            CompletionDecision::RejectedRemediable { feedback_for_model, .. } => {
+                assert!(feedback_for_model[0].content.len() < 7_000);
+                assert!(feedback_for_model[0].content.contains(&preview));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(state.scoped_search_queries, queries);
+        let first = format!("{}A", "x".repeat(200));
+        let second = format!("{}B", "x".repeat(200));
+        state.scoped_search_queries = vec![first.clone(), second.clone()];
+        let recovered = scope_event(&app, &state, json!({"tool":"search_text","query":first,"status":"Succeeded","scope":"repository","completeness":true}));
+        assert_eq!(recovered.scoped_search_queries, vec![second]);
+        let guided = app.with_project_guidance(vec![GuidanceDocument { kind: GuidanceKind::Readme, path: "README.md".into(), content: "guidance-marker".repeat(1_000) }]);
+        let (_, context, omissions) = guided.build_budgeted_context(&state);
+        assert!(omissions.is_empty());
+        assert!(context.iter().any(|b| b.content.contains("guidance-marker")));
     }
 
     #[test]

@@ -676,7 +676,10 @@ fn requirements_orientation_is_framed_as_data_for_analysis() {
             && message["content"].as_str().is_some_and(|content| {
                 content.starts_with("[untrusted inspection evidence data]")
                     && content.contains("Full-file read paths: []")
-                    && content.contains("Unresolved scoped-search queries: []")
+                    && content.contains("Unresolved scoped-search queries: {")
+                    && content.contains("\"omitted\":0")
+                    && content.contains("\"queries\":[]")
+                    && content.contains("Display-only previews")
             })
     }).expect("inspection evidence must remain a separate untrusted user context block");
     assert_ne!(inspection_evidence["content"], requirement_context["content"]);
