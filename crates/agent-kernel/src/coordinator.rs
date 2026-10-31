@@ -579,6 +579,28 @@ fn build_tool_event_details(
     if let Some(query) = arguments.get("query").and_then(|v| v.as_str()) {
         summary["query"] = serde_json::Value::String(query.into());
     }
+    if matches!(tool, "read_file" | "search_text") {
+        for key in ["offset", "limit"] {
+            if let Some(value) = arguments.get(key) {
+                summary[key] = value.clone();
+            }
+        }
+        // Validated offset 1 (including 1.0) is equivalent to the omitted default.
+        let ranged = arguments.get("limit").is_some()
+            || arguments.get("offset").and_then(|v| v.as_f64()).is_some_and(|n| n > 1.0);
+        let file_scoped = tool == "read_file" || arguments.get("path").is_some();
+        summary["scope"] = serde_json::json!(match (file_scoped, ranged) {
+            (true, false) => "file",
+            (true, true) => "file_range",
+            (false, false) => "repository",
+            (false, true) => "repository_line_ranges",
+        });
+        if tool == "read_file" {
+            if let Some(content) = result.value.get("content").and_then(|v| v.as_str()) {
+                summary["has_content"] = serde_json::json!(!content.is_empty());
+            }
+        }
+    }
     if let Some(content_id) = result.value.get("content_id").and_then(|v| v.as_str()) {
         summary["content_id"] = serde_json::Value::String(content_id.into());
     }
@@ -699,6 +721,56 @@ mod tests {
                 "changed_files": ["src/main.rs", "src/lib.rs"]
             })
         );
+    }
+
+    #[test]
+    fn range_tool_event_details_preserve_scope_and_bounds() {
+        for (tool, arguments, scope) in [
+            ("read_file", json!({"path": "a"}), "file"),
+            ("read_file", json!({"path": "a", "offset": 1}), "file"),
+            ("read_file", json!({"path": "a", "offset": 2, "limit": 4}), "file_range"),
+            ("search_text", json!({"query": "x"}), "repository"),
+            ("search_text", json!({"query": "x", "offset": 1.0}), "repository"),
+            ("search_text", json!({"query": "x", "limit": u64::MAX}), "repository_line_ranges"),
+            ("search_text", json!({"query": "x", "offset": u64::MAX}), "repository_line_ranges"),
+            ("search_text", json!({"query": "x", "path": "a"}), "file"),
+            ("search_text", json!({"query": "x", "path": "a", "offset": 2.0}), "file_range"),
+        ] {
+            let details = build_tool_event_details(tool, &arguments, &ToolResult {
+                status: ToolStatus::Succeeded,
+                value: json!({"content": "line\n", "content_id": "full-id", "truncated": false, "completeness": true}),
+            }).unwrap();
+            let summary: serde_json::Value = serde_json::from_str(&details).unwrap();
+            assert_eq!(summary["scope"], scope);
+            for key in ["path", "query", "offset", "limit"] {
+                assert_eq!(summary.get(key), arguments.get(key));
+            }
+            assert_eq!(summary["content_id"], "full-id");
+            assert_eq!(summary["completeness"], true);
+            assert_eq!(summary["truncated"], false);
+            assert!(summary.get("content").is_none());
+            assert_eq!(summary["has_content"], if tool == "read_file" { json!(true) } else { json!(null) });
+        }
+    }
+
+    #[test]
+    fn range_tool_event_details_retain_empty_and_failed_evidence() {
+        for status in [ToolStatus::Succeeded, ToolStatus::Denied, ToolStatus::Failed] {
+            let expected_status = format!("{status:?}");
+            let summary: serde_json::Value = serde_json::from_str(&build_tool_event_details(
+                "read_file", &json!({"path": "a", "offset": 999}), &ToolResult {
+                    status, value: json!({"content": "", "completeness": true}),
+                },
+            ).unwrap()).unwrap();
+            assert_eq!(summary["has_content"], false);
+            assert_eq!(summary["status"], expected_status);
+            assert_eq!(summary["scope"], "file_range");
+        }
+        let summary: serde_json::Value = serde_json::from_str(&build_tool_event_details(
+            "list_directory", &json!({"path": "src", "offset": 2, "limit": 5}),
+            &ToolResult { status: ToolStatus::Succeeded, value: json!({}) },
+        ).unwrap()).unwrap();
+        assert_eq!(summary, json!({"tool": "list_directory", "status": "Succeeded", "path": "src"}));
     }
 
     #[test]
