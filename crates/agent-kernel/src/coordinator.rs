@@ -601,6 +601,9 @@ fn build_tool_event_details(
             }
         }
     }
+    if let Some(observed_head) = result.value.get("observed_head").and_then(|v| v.as_str()) {
+        summary["observed_head"] = serde_json::json!(observed_head);
+    }
     if let Some(content_id) = result.value.get("content_id").and_then(|v| v.as_str()) {
         summary["content_id"] = serde_json::Value::String(content_id.into());
     }
@@ -738,7 +741,7 @@ mod tests {
         ] {
             let details = build_tool_event_details(tool, &arguments, &ToolResult {
                 status: ToolStatus::Succeeded,
-                value: json!({"content": "line\n", "content_id": "full-id", "truncated": false, "completeness": true}),
+                value: json!({"content": "line\n", "content_id": "full-id", "truncated": false, "completeness": true, "observed_head": "commit-id"}),
             }).unwrap();
             let summary: serde_json::Value = serde_json::from_str(&details).unwrap();
             assert_eq!(summary["scope"], scope);
@@ -746,6 +749,7 @@ mod tests {
                 assert_eq!(summary.get(key), arguments.get(key));
             }
             assert_eq!(summary["content_id"], "full-id");
+            assert_eq!(summary["observed_head"], "commit-id");
             assert_eq!(summary["completeness"], true);
             assert_eq!(summary["truncated"], false);
             assert!(summary.get("content").is_none());

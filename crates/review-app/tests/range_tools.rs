@@ -156,6 +156,42 @@ fn production_review_ranges_keep_identity_and_require_same_query_global_evidence
     assert!(seen.last().unwrap()["context"].to_string().contains("Full-file read paths: []"));
 }
 #[test]
+fn production_global_then_scoped_search_reuses_only_immutable_evidence() {
+    for target in ["HEAD", ":working", ":staged"] {
+        for ranged_repository in [false, true] {
+            let dir = fixture(false);
+            std::fs::write(dir.path().join("b.txt"), "one\nneedle\nthree\n").unwrap();
+            git(dir.path(), &["add", "b.txt"]); git(dir.path(), &["commit", "-qm", "second searchable file"]);
+            let mut req = request(dir.path()); req.base_ref = "HEAD~2".into(); req.head_ref = target.into();
+            let scope = if ranged_repository { json!({"query":"e","offset":2,"limit":1}) } else { json!({"query":"e","path":"a.txt","offset":2,"limit":1}) };
+            let actions = vec![
+                call("files", "get_changed_files", json!({})),
+                call("a", "read_diff", json!({"path":"a.txt"})),
+                call("b", "read_diff", json!({"path":"b.txt"})),
+                call("global", "search_text", json!({"query":"e"})),
+                call("scoped", "search_text", scope),
+                ModelAction::CompletionRequest { action_id: "complete".into(), payload: json!({"findings":[{"blocking":false,"message":"other_symbol not found","path":"a.txt","severity":"low"}]}) },
+            ];
+            let seen = Arc::new(Mutex::new(vec![]));
+            let config = ReviewConfig { max_turns: 6, max_repeated_actions: 1, ..Default::default() };
+            let (result, events) = run_review_with_provider(&req, &config, Probe { actions: actions.into(), seen: seen.clone() }, None).unwrap();
+            assert_eq!(matches!(result.status, ReviewStatus::Approved), target == "HEAD", "{target}");
+            let metadata = summaries(&events);
+            assert_eq!(metadata.iter().filter(|v| v["tool"] == "search_text" && v["scope"] == "repository").count(), 1);
+            let searches: Vec<_> = metadata.iter().filter(|v| v["tool"] == "search_text").collect();
+            assert_eq!(searches[0]["observed_head"], searches[1]["observed_head"]);
+            let seen = seen.lock().unwrap();
+            let scoped = tool_value(&seen, "scoped");
+            let matches = scoped["matches"].as_array().unwrap();
+            assert_eq!(matches.len(), if ranged_repository { 2 } else { 1 });
+            for item in matches { assert_eq!(item["line"], 2); assert_eq!(item["content"], if target == ":working" { "needle\n" } else { "needle" }); }
+            if ranged_repository { assert!(matches.iter().any(|v| v["path"] == "a.txt")); assert!(matches.iter().any(|v| v["path"] == "b.txt")); }
+            assert_eq!(scoped["completeness"], true);
+        }
+    }
+}
+
+#[test]
 fn production_mutable_reads_invalidate_stale_full_file_evidence() {
     struct MutatingProbe { inner: Probe, root: std::path::PathBuf, staged: bool }
     impl ModelProvider for MutatingProbe {

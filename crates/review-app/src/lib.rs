@@ -298,7 +298,7 @@ pub fn run_review_with_sources<C: Clock, I: IdGenerator>(
     serde_json::to_vec(&result).expect("review result is serializable")
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ReviewState {
     inspected: bool,
     findings: Vec<Finding>,
@@ -308,6 +308,8 @@ pub struct ReviewState {
     has_truncated_search: bool,
     full_file_read_paths: Vec<(String, String)>,
     scoped_search_queries: Vec<String>,
+    complete_search_evidence: Vec<(String, String)>,
+    mutable_search_target: bool,
     terminal_reason: Option<ReviewReason>,
     has_read_file: bool,
     has_list_directory: bool,
@@ -529,6 +531,8 @@ impl AgentApplication for ReviewApplication {
                 has_truncated_search: false,
                 full_file_read_paths: vec![],
                 scoped_search_queries: vec![],
+                complete_search_evidence: vec![],
+                mutable_search_target: matches!(request.head_ref.as_str(), ":working" | ":staged"),
                 terminal_reason: None,
                 has_read_file: false,
                 has_list_directory: false,
@@ -793,6 +797,7 @@ impl AgentApplication for ReviewApplication {
             let mut has_truncated_search = state.has_truncated_search;
             let mut full_file_read_paths = state.full_file_read_paths.clone();
             let mut scoped_search_queries = state.scoped_search_queries.clone();
+            let mut complete_search_evidence = state.complete_search_evidence.clone();
             let mut has_read_file = state.has_read_file;
             let mut has_list_directory = state.has_list_directory;
 
@@ -832,12 +837,19 @@ impl AgentApplication for ReviewApplication {
                 if tool == "search_text" && status == "Succeeded"
                     && let Some(query) = info["query"].as_str()
                 {
+                    let immutable_head = info["observed_head"].as_str().filter(|head| {
+                        !state.mutable_search_target && head.len() == 40 && head.bytes().all(|b| b.is_ascii_hexdigit())
+                    });
                     match info["scope"].as_str() {
-                        Some("repository") if info["completeness"].as_bool() == Some(true) => {
+                        Some("repository") if info["completeness"].as_bool() == Some(true) && info["truncated"].as_bool() != Some(true) => {
                             scoped_search_queries.retain(|q| q != query);
+                            if let Some(head) = immutable_head
+                                && !complete_search_evidence.iter().any(|(q, h)| q == query && h == head)
+                            { complete_search_evidence.push((query.into(), head.into())); }
                         }
                         Some("file" | "file_range" | "repository_line_ranges") => {
-                            if !scoped_search_queries.iter().any(|q| q == query) {
+                            let covered = immutable_head.is_some_and(|head| complete_search_evidence.iter().any(|(q, h)| q == query && h == head));
+                            if !covered && !scoped_search_queries.iter().any(|q| q == query) {
                                 scoped_search_queries.push(query.to_string());
                             }
                         }
@@ -873,6 +885,8 @@ impl AgentApplication for ReviewApplication {
                 has_truncated_search,
                 full_file_read_paths,
                 scoped_search_queries,
+                complete_search_evidence,
+                mutable_search_target: state.mutable_search_target,
                 terminal_reason,
                 has_read_file,
                 has_list_directory,
@@ -887,6 +901,8 @@ impl AgentApplication for ReviewApplication {
                 has_truncated_search: state.has_truncated_search,
                 full_file_read_paths: state.full_file_read_paths.clone(),
                 scoped_search_queries: state.scoped_search_queries.clone(),
+                complete_search_evidence: state.complete_search_evidence.clone(),
+                mutable_search_target: state.mutable_search_target,
                 terminal_reason,
                 has_read_file: state.has_read_file,
                 has_list_directory: state.has_list_directory,
@@ -1115,6 +1131,37 @@ mod tests {
     }
 
     #[test]
+    fn immutable_global_evidence_survives_only_same_query_same_observation_narrowing() {
+        let (app, initial) = scope_fixture();
+        let head = "a".repeat(40);
+        let global = json!({"tool":"search_text","status":"Succeeded","query":"symbol","scope":"repository","completeness":true,"observed_head":head});
+        for (mutable, status, complete, observed, query, scoped_head, unresolved) in [
+            (false,"Succeeded",true,Some(head.as_str()),"symbol",Some(head.as_str()),false),
+            (true,"Succeeded",true,Some(head.as_str()),"symbol",Some(head.as_str()),true),
+            (false,"Failed",true,Some(head.as_str()),"symbol",Some(head.as_str()),true),
+            (false,"Denied",true,Some(head.as_str()),"symbol",Some(head.as_str()),true),
+            (false,"Succeeded",false,Some(head.as_str()),"symbol",Some(head.as_str()),true),
+            (false,"Succeeded",true,None,"symbol",Some(head.as_str()),true),
+            (false,"Succeeded",true,Some(head.as_str()),"other",Some(head.as_str()),true),
+            (false,"Succeeded",true,Some(head.as_str()),"symbol",None,true),
+            (false,"Succeeded",true,Some(head.as_str()),"symbol",Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),true),
+        ] {
+            let mut initial = initial.clone(); initial.mutable_search_target = mutable;
+            let mut event = global.clone(); event["status"] = json!(status); event["completeness"] = json!(complete); event["observed_head"] = json!(observed);
+            let broad = scope_event(&app, &initial, event);
+            for scope in ["file","file_range","repository_line_ranges"] {
+                let narrowed = scope_event(&app, &broad, json!({"tool":"search_text","status":"Succeeded","query":query,"scope":scope,"completeness":true,"observed_head":scoped_head}));
+                assert_eq!(!narrowed.scoped_search_queries.is_empty(), unresolved);
+            }
+        }
+        let broad = scope_event(&app, &initial, global);
+        let incomplete = scope_event(&app, &broad, json!({"tool":"search_text","status":"Succeeded","query":"symbol","scope":"file","completeness":false,"observed_head":head}));
+        assert!(incomplete.has_truncated_search);
+        let completion = app.parse_completion(&json!({"findings":[{"blocking":false,"message":"symbol not found","severity":"low"}]})).unwrap();
+        assert!(matches!(app.validate_completion(&incomplete, &completion), CompletionDecision::RejectedRemediable { ref reason_codes, .. } if reason_codes == &["negative_evidence_from_truncated_search"]));
+    }
+
+    #[test]
     fn scoped_absence_requires_successful_complete_same_query_broadening() {
         let (app, initial) = scope_fixture();
         let completion = app.parse_completion(&json!({"findings":[{"blocking":false,"message":"symbol not found","severity":"low"}]})).unwrap();
@@ -1299,6 +1346,7 @@ mod tests {
             full_file_read_paths: vec![],
             scoped_search_queries: vec![],
             inspected_paths: vec!["src/file_0.rs".into()], // only one inspected
+            complete_search_evidence: vec![], mutable_search_target: false,
             has_truncated_search: false,
             terminal_reason: None,
             has_read_file: true,
@@ -1368,6 +1416,7 @@ mod tests {
             full_file_read_paths: vec![],
             scoped_search_queries: vec![],
             inspected_paths: vec!["src/file_0.rs".into()],
+            complete_search_evidence: vec![], mutable_search_target: false,
             has_truncated_search: false,
             terminal_reason: None,
             has_read_file: true,
@@ -1407,6 +1456,7 @@ mod tests {
             full_file_read_paths: vec![],
             scoped_search_queries: vec![],
             inspected_paths: vec!["src/file_0.rs".into(), "src/file_1.rs".into()],
+            complete_search_evidence: vec![], mutable_search_target: false,
             has_truncated_search: false,
             terminal_reason: None,
             has_read_file: true,
@@ -1462,6 +1512,7 @@ mod context_budgeting_tests {
             findings: vec![],
             requirements: None,
             changed_files: changed_files.iter().map(|s| s.to_string()).collect(),
+            complete_search_evidence: vec![], mutable_search_target: false,
             inspected_paths: vec![],
             full_file_read_paths: vec![],
             scoped_search_queries: vec![],
