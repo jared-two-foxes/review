@@ -1066,8 +1066,7 @@ impl SearchScope<'_> {
 }
 
 fn is_search_path(path: &str) -> bool {
-    !path.contains(['\\', ':'])
-        && path.split('/').all(|part| !matches!(part, "" | "." | ".."))
+    !path.contains(['\\', ':']) && path.split('/').all(|part| !matches!(part, "" | "." | ".."))
 }
 
 pub struct SearchTextTool {
@@ -1121,12 +1120,16 @@ impl Tool for SearchTextTool {
     fn validate_arguments(&self, arguments: &Value) -> Result<(), String> {
         let valid = arguments.as_object().is_some_and(|object| {
             object.get("query").and_then(Value::as_str).is_some()
-                && object.keys().all(|key| matches!(key.as_str(), "query" | "path" | "offset" | "limit"))
-                && object.get("path").is_none_or(|value| value.as_str().is_some_and(is_search_path))
+                && object
+                    .keys()
+                    .all(|key| matches!(key.as_str(), "query" | "path" | "offset" | "limit"))
+                && object
+                    .get("path")
+                    .is_none_or(|value| value.as_str().is_some_and(is_search_path))
                 && ["offset", "limit"].iter().all(|key| {
-                    object.get(*key).is_none_or(|value| {
-                        value.as_u64().is_some_and(|number| number > 0)
-                    })
+                    object
+                        .get(*key)
+                        .is_none_or(|value| value.as_u64().is_some_and(|number| number > 0))
                 })
         });
         if valid {
@@ -1148,7 +1151,10 @@ impl Tool for SearchTextTool {
             offset: arguments.get("offset").and_then(Value::as_u64).unwrap_or(1),
             limit: arguments.get("limit").and_then(Value::as_u64),
         };
-        if scope.path.is_some_and(|path| self.policy.is_path_denied(path)) {
+        if scope
+            .path
+            .is_some_and(|path| self.policy.is_path_denied(path))
+        {
             return ToolResult {
                 status: ToolStatus::Denied,
                 value: json!({"error": "path denied"}),
@@ -1286,7 +1292,10 @@ fn search_index(
     for entry in index.iter() {
         // Compare identity before converting a filename for display: invalid
         // UTF-8 must not alias a literal replacement character in the request.
-        if scope.path.is_some_and(|selected| entry.path != selected.as_bytes()) {
+        if scope
+            .path
+            .is_some_and(|selected| entry.path != selected.as_bytes())
+        {
             continue;
         }
         let path = String::from_utf8_lossy(&entry.path).to_string();
@@ -1339,7 +1348,9 @@ fn search_with_ripgrep(
         let scope_path = mat.path.strip_prefix(root).unwrap_or(&mat.path);
         let line = mat.line.unwrap_or(0);
         if policy.is_path_denied(&rel_path)
-            || scope.path.is_some_and(|selected| scope_path != std::path::Path::new(selected))
+            || scope
+                .path
+                .is_some_and(|selected| scope_path != std::path::Path::new(selected))
             || !scope.includes_line(line)
         {
             continue;
