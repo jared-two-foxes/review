@@ -1026,6 +1026,61 @@ fn read_guidance_document(
     }))
 }
 
+/// A file/line filter, independent of the result match cap.
+struct SearchScope<'a> {
+    path: Option<&'a str>,
+    offset: u64,
+    limit: Option<u64>,
+}
+
+impl SearchScope<'_> {
+    fn includes_path(&self, path: &str) -> bool {
+        self.path.is_none_or(|selected| selected == path)
+    }
+
+    fn includes_line(&self, line: u64) -> bool {
+        line >= self.offset && self.limit.is_none_or(|limit| line - self.offset < limit)
+    }
+
+    fn collect_text_matches(
+        &self,
+        path: &str,
+        content: &str,
+        query: &str,
+        matches: &mut Vec<(String, usize, String)>,
+    ) {
+        if !self.includes_path(path) {
+            return;
+        }
+        for (idx, line) in content
+            .lines()
+            .enumerate()
+            .skip_while(|(idx, _)| (*idx as u64) + 1 < self.offset)
+            .take_while(|(idx, _)| self.includes_line((*idx as u64) + 1))
+        {
+            if line.contains(query) {
+                matches.push((path.to_string(), idx + 1, line.to_string()));
+            }
+        }
+    }
+}
+
+fn search_line_number(value: &Value) -> Option<u64> {
+    if let Some(number) = value.as_u64() {
+        return (number > 0).then_some(number);
+    }
+    // JSON Schema integers include whole-number floats such as 1.0 and 1e0.
+    // Check the represented value before casting: f64(u64::MAX) is 2^64,
+    // which must be excluded to avoid saturating an out-of-range number.
+    let number = value.as_f64()?;
+    (number >= 1.0 && number < 18446744073709551616.0 && number.fract() == 0.0)
+        .then(|| number as u64)
+}
+
+fn is_search_path(path: &str) -> bool {
+    !path.contains(['\\', ':']) && path.split('/').all(|part| !matches!(part, "" | "." | ".."))
+}
+
 pub struct SearchTextTool {
     repo: GitRepo,
     head: ReviewTarget,
@@ -1046,29 +1101,77 @@ impl Tool for SearchTextTool {
     fn description(&self) -> ToolDescription {
         ToolDescription {
             name: self.name().to_string(),
-            description: "Search repository files for a literal text query".to_string(),
+            description: "Search repository files for a literal text query, optionally within one file and a line range. Results keep original line numbers; completeness describes the requested scope. Existing target visibility, ignore and symlink rules still apply.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["query"],
-                "properties": {"query": {"type": "string"}}
+                "properties": {
+                    "query": {"type": "string"},
+                    "path": {
+                        "type": "string", "minLength": 1,
+                        "pattern": r"^[^/\\:]+(?:/[^/\\:]+)*$",
+                        // The negative lookahead is an absolute end-of-string check,
+                        // unlike $, which can also precede a final newline.
+                        "not": {"pattern": r"(^|/)\.{1,2}(/|(?![\s\S]))"},
+                        "description": "Exact repository-relative file path using forward slashes, without empty, dot or parent components, backslashes or colons. Defaults to all searchable files."
+                    },
+                    "offset": {
+                        "type": "integer", "minimum": 1, "maximum": u64::MAX,
+                        "description": "1-based starting line in each file; defaults to 1. Beyond EOF returns no matches."
+                    },
+                    "limit": {
+                        "type": "integer", "minimum": 1, "maximum": u64::MAX,
+                        "description": "Maximum number of lines to search in each file, not a match count; defaults to all remaining lines."
+                    }
+                }
             }),
         }
     }
 
     fn validate_arguments(&self, arguments: &Value) -> Result<(), String> {
-        if arguments.get("query").and_then(Value::as_str).is_some()
-            && arguments
-                .as_object()
-                .is_some_and(|object| object.len() == 1)
-        {
+        let valid = arguments.as_object().is_some_and(|object| {
+            object.get("query").and_then(Value::as_str).is_some()
+                && object
+                    .keys()
+                    .all(|key| matches!(key.as_str(), "query" | "path" | "offset" | "limit"))
+                && object
+                    .get("path")
+                    .is_none_or(|value| value.as_str().is_some_and(is_search_path))
+                && ["offset", "limit"].iter().all(|key| {
+                    object
+                        .get(*key)
+                        .is_none_or(|value| search_line_number(value).is_some())
+                })
+        });
+        if valid {
             Ok(())
         } else {
-            Err("arguments must contain only a string query".to_string())
+            Err("arguments must contain a string query and only optional repository-relative path and positive integer offset/limit (at most u64::MAX)".to_string())
         }
     }
 
     fn execute(&self, arguments: &Value) -> ToolResult {
+        if let Err(error) = self.validate_arguments(arguments) {
+            return ToolResult {
+                status: ToolStatus::Failed,
+                value: json!({"error": error}),
+            };
+        }
+        let scope = SearchScope {
+            path: arguments.get("path").and_then(Value::as_str),
+            offset: arguments.get("offset").and_then(search_line_number).unwrap_or(1),
+            limit: arguments.get("limit").and_then(search_line_number),
+        };
+        if scope
+            .path
+            .is_some_and(|path| self.policy.is_path_denied(path))
+        {
+            return ToolResult {
+                status: ToolStatus::Denied,
+                value: json!({"error": "path denied"}),
+            };
+        }
         let query = match arguments.get("query").and_then(Value::as_str) {
             Some(q) => q,
             None => {
@@ -1091,11 +1194,11 @@ impl Tool for SearchTextTool {
                     }
                 };
                 let mut m = Vec::new();
-                search_tree_walk(repo, &tree, "", query, &self.policy, &mut m);
+                search_tree_walk(repo, &tree, "", query, &self.policy, &scope, &mut m);
                 m
             }
             ReviewTarget::WorkingDirectory => {
-                match search_with_ripgrep(&self.repo, query, &self.policy) {
+                match search_with_ripgrep(&self.repo, query, &self.policy, &scope) {
                     Ok(m) => m,
                     Err(_) => {
                         return ToolResult {
@@ -1105,7 +1208,7 @@ impl Tool for SearchTextTool {
                     }
                 }
             }
-            ReviewTarget::Index => match search_index(&self.repo, query, &self.policy) {
+            ReviewTarget::Index => match search_index(&self.repo, query, &self.policy, &scope) {
                 Ok(m) => m,
                 Err(_) => {
                     return ToolResult {
@@ -1146,6 +1249,7 @@ fn search_tree_walk(
     prefix: &str,
     query: &str,
     policy: &SecurityPolicy,
+    scope: &SearchScope<'_>,
     matches: &mut Vec<(String, usize, String)>,
 ) {
     for entry in tree.iter() {
@@ -1165,10 +1269,13 @@ fn search_tree_walk(
                 if let Ok(obj) = entry.to_object(repo)
                     && let Some(sub) = obj.as_tree()
                 {
-                    search_tree_walk(repo, sub, &rel, query, policy, matches);
+                    search_tree_walk(repo, sub, &rel, query, policy, scope, matches);
                 }
             }
             git2::ObjectType::Blob => {
+                if !scope.includes_path(&rel) {
+                    continue;
+                }
                 // Skip symlink-mode blobs: their content is a target path, not file text.
                 if entry.filemode_raw() & 0o170000 == 0o120000 {
                     continue;
@@ -1177,11 +1284,7 @@ fn search_tree_walk(
                     && let Some(blob) = obj.as_blob()
                     && let Ok(content) = String::from_utf8(blob.content().to_vec())
                 {
-                    for (idx, line) in content.lines().enumerate() {
-                        if line.contains(query) {
-                            matches.push((rel.clone(), idx + 1, line.to_string()));
-                        }
-                    }
+                    scope.collect_text_matches(&rel, &content, query, matches);
                 }
             }
             _ => {}
@@ -1193,11 +1296,20 @@ fn search_index(
     repo: &GitRepo,
     query: &str,
     policy: &SecurityPolicy,
+    scope: &SearchScope<'_>,
 ) -> Result<Vec<(String, usize, String)>, crate::error::RepoError> {
     let index = repo.index()?;
     let git_repo = repo.raw_repo();
     let mut matches = Vec::new();
     for entry in index.iter() {
+        // Compare identity before converting a filename for display: invalid
+        // UTF-8 must not alias a literal replacement character in the request.
+        if scope
+            .path
+            .is_some_and(|selected| entry.path != selected.as_bytes())
+        {
+            continue;
+        }
         let path = String::from_utf8_lossy(&entry.path).to_string();
         if policy.is_path_denied(&path) {
             continue;
@@ -1209,11 +1321,7 @@ fn search_index(
         if let Ok(blob) = git_repo.find_blob(entry.id)
             && let Ok(content) = String::from_utf8(blob.content().to_vec())
         {
-            for (idx, line) in content.lines().enumerate() {
-                if line.contains(query) {
-                    matches.push((path.clone(), idx + 1, line.to_string()));
-                }
-            }
+            scope.collect_text_matches(&path, &content, query, &mut matches);
         }
     }
     Ok(matches)
@@ -1223,6 +1331,7 @@ fn search_with_ripgrep(
     repo: &GitRepo,
     query: &str,
     policy: &SecurityPolicy,
+    scope: &SearchScope<'_>,
 ) -> Result<Vec<(String, usize, String)>, crate::error::RepoError> {
     use ripgrep_api::SearchBuilder;
 
@@ -1245,13 +1354,23 @@ fn search_with_ripgrep(
             .trim_start_matches(['/', '\\'])
             .to_string();
 
-        if policy.is_path_denied(&rel_path) {
+        // Native Path equality preserves non-UTF-8 bytes and literal Unix
+        // backslashes while recognizing actual platform directory separators.
+        // Keep the existing lossy result display separate from scope identity.
+        let scope_path = mat.path.strip_prefix(root).unwrap_or(&mat.path);
+        let line = mat.line.unwrap_or(0);
+        if policy.is_path_denied(&rel_path)
+            || scope
+                .path
+                .is_some_and(|selected| scope_path != std::path::Path::new(selected))
+            || !scope.includes_line(line)
+        {
             continue;
         }
 
         results.push((
             rel_path,
-            mat.line.unwrap_or(0) as usize,
+            line as usize,
             String::from_utf8_lossy(mat.text.as_ref()).into_owned(),
         ));
     }

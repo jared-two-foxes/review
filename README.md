@@ -69,6 +69,20 @@ This reads lines 100–139 from the selected repository head target. `offset` is
 
 Ranges stop at EOF; an offset beyond EOF or an empty file returns empty content. Lines are separated by LF, with original line endings (including CRLF), blank lines, and any final unterminated line preserved. The existing byte cap applies **after** selecting lines, so chunks can read beyond the first capped portion of a large file. `truncated` and `completeness` indicate whether the requested range fit within that byte cap, not whether it covers the entire file. `content_id` still hashes the **full file**, and `observed_head` still identifies the selected target. Path security rules are unchanged.
 
+### Searching file chunks
+
+The model-facing `search_text` tool accepts a required literal `query` and optional `path`, `offset`, and `limit`:
+
+```json
+{"query": "needle", "path": "src/main.rs", "offset": 100, "limit": 40}
+```
+
+This searches lines 100–139 in `src/main.rs` at the selected commit, index, or working-directory target. `offset` is a **1-based starting line** (default: 1), and `limit` is a **maximum number of file lines to search**, not a match count (default: through EOF). Either can be used alone; both must be positive integers at most `u64::MAX`. Invalid types, zero, negative values, nulls, and unknown arguments are rejected.
+
+Omit `path` to search all searchable repository files; a supplied line range then applies independently to each file. Existing query-only calls still search entire files. `path` is an exact repository-relative file name using forward slashes, without empty, `.` or `..` components, backslashes, colons, or an absolute root. It is a filter over existing search visibility, not a new file-read interface: missing files, directory paths, and files excluded by the target's search rules return no matches. Working-directory searches retain existing ignore rules; sensitive paths are denied and symlinks remain excluded.
+
+Matches retain their **original file line numbers**. Empty files and offsets beyond EOF return no matches; ranges stop at EOF. Path/line selection happens before the existing match cap, and `completeness` indicates whether all matches **within the requested scope** fit that cap—not whether the whole file or repository was searched. `observed_head` continues to identify the selected target.
+
 ## CLI shape
 
 The `review-cli` binary supports either:

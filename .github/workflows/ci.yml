@@ -11,3 +11,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --release
       - run: cargo test
+      - name: Search range and security regressions
+        run: cargo test -p code-agent-runtime --test search_text --test path_security --test observation_identity
