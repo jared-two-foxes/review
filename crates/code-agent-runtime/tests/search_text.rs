@@ -65,14 +65,33 @@ fn make_repo_with_searchable_text() -> TempDir {
 #[test]
 fn reused_staged_search_observes_external_index_updates() {
     let dir = make_repo_with_searchable_text();
-    let tool = SearchTextTool::new(GitRepo::open(dir.path()).unwrap(), ReviewTarget::Index, SecurityPolicy::new());
+    let tool = SearchTextTool::new(
+        GitRepo::open(dir.path()).unwrap(),
+        ReviewTarget::Index,
+        SecurityPolicy::new(),
+    );
     let args = json!({"query":"foo.bar","path":"src/one.txt","offset":2,"limit":2});
     std::fs::write(dir.path().join("src/one.txt"), "working-only foo.bar\n").unwrap();
     let mut identities = vec![];
-    for (epoch, expected) in ["second foo.bar match", "updated foo.bar match"].iter().enumerate() {
+    for (epoch, expected) in ["second foo.bar match", "updated foo.bar match"]
+        .iter()
+        .enumerate()
+    {
         if epoch == 1 {
-            std::fs::write(dir.path().join("src/one.txt"), "foo.bar excluded line1\nplain\nupdated foo.bar match\nfoo.bar excluded line4\n").unwrap();
-            assert!(Command::new("git").args(["-c","core.autocrlf=false","add","src/one.txt"]).current_dir(dir.path()).output().unwrap().status.success());
+            std::fs::write(
+                dir.path().join("src/one.txt"),
+                "foo.bar excluded line1\nplain\nupdated foo.bar match\nfoo.bar excluded line4\n",
+            )
+            .unwrap();
+            assert!(
+                Command::new("git")
+                    .args(["-c", "core.autocrlf=false", "add", "src/one.txt"])
+                    .current_dir(dir.path())
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
             std::fs::write(dir.path().join("src/one.txt"), "working-only foo.bar\n").unwrap();
         }
         let index_before = std::fs::read(dir.path().join(".git/index")).unwrap();
@@ -80,15 +99,23 @@ fn reused_staged_search_observes_external_index_updates() {
         for _ in 0..2 {
             let result = tool.execute(&args);
             assert!(matches!(result.status, ToolStatus::Succeeded));
-            assert_eq!(result.value["matches"], json!([{"path":"src/one.txt","line":3,"content":expected}]));
+            assert_eq!(
+                result.value["matches"],
+                json!([{"path":"src/one.txt","line":3,"content":expected}])
+            );
             assert_eq!(result.value["completeness"], true);
             let observed = result.value["observed_head"].as_str().unwrap().to_string();
             assert!(Oid::from_str(&observed).is_ok());
-            if let Some(ref identity) = previous { assert_eq!(&observed, identity); }
+            if let Some(ref identity) = previous {
+                assert_eq!(&observed, identity);
+            }
             previous = Some(observed);
         }
         identities.push(previous.unwrap());
-        assert_eq!(std::fs::read(dir.path().join(".git/index")).unwrap(), index_before);
+        assert_eq!(
+            std::fs::read(dir.path().join(".git/index")).unwrap(),
+            index_before
+        );
     }
     assert_ne!(identities[0], identities[1]);
 }
