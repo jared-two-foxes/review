@@ -103,6 +103,65 @@ fn production_ranged_reads_and_full_file_mutation_reach_candidate_ready() { exer
 fn production_sliced_precondition_cannot_mutate_or_reach_candidate_ready() { exercise(true); }
 
 #[test]
+fn production_byte_truncation_then_narrow_retry_preserves_full_file_mutation() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(std::process::Command::new("git").current_dir(dir.path()).args(["init", "-q"]).output().unwrap().status.success());
+    let padding = "padding\n".repeat(10_000);
+    let before = format!("one\nbefore\n{padding}");
+    let after = format!("one\nafter\n{padding}");
+    assert_eq!(before.len(), 80_011);
+    std::fs::write(dir.path().join("a.txt"), &before).unwrap();
+    let request = ImplementRequest { repository_path: dir.path().to_str().unwrap().into(), target_path: "a.txt".into(), expected_content: before.clone(), desired_content: after.clone() };
+    let actions = vec![
+        call("large", "read_file", json!({"path":"a.txt"})),
+        call("retry", "read_file", json!({"path":"a.txt","offset":2,"limit":1})),
+        call("mutate", "replace_file_content", json!({"path":"a.txt","expected":before,"replacement":after})),
+        call("verify", "read_file", json!({"path":"a.txt","offset":2,"limit":1})),
+        ModelAction::CompletionRequest { action_id: "complete".into(), payload: json!({"ready":true,"summary":"Retried bounded read and verified full-file replacement."}) },
+    ];
+    let config = ImplementConfig { max_turns: actions.len() as u32, ..Default::default() };
+    let seen = Arc::new(Mutex::new(vec![]));
+    let (result, events) = run_implement_with_provider(&request, &config, Probe { actions: actions.into(), seen: seen.clone() }, None).unwrap();
+    assert!(matches!(result.status, ImplementStatus::CandidateReady));
+    assert!(result.applied && result.verified);
+    assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).unwrap(), after);
+    let seen = seen.lock().unwrap();
+    assert_context_ids(&seen, &before, &after);
+    let mut tools: Vec<_> = seen[0]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    tools.sort_unstable();
+    assert_eq!(tools, vec!["get_project_guidance", "read_file", "replace_file_content"]);
+    let initial = tool_value(&seen, "large");
+    assert_eq!(initial["truncated"], true);
+    assert_eq!(initial["completeness"], false);
+    assert_eq!(initial["content_id"], content_id_for_bytes(before.as_bytes()));
+    assert_eq!(initial["content"], format!("{}\n[truncated: 65536 of 80011 bytes]", &before[..65_536]));
+    for (id, bytes, full) in [("retry", "before\n", &before), ("verify", "after\n", &after)] {
+        let value = tool_value(&seen, id);
+        assert_eq!(value["content"], bytes);
+        assert_eq!(value["truncated"], false);
+        assert_eq!(value["completeness"], true);
+        assert_eq!(value["content_id"], content_id_for_bytes(full.as_bytes()));
+        assert_ne!(value["content_id"], content_id_for_bytes(bytes.as_bytes()));
+    }
+    let metadata: Vec<Value> = events.iter().filter(|e| e.event_type == "kernel.tool_completed").map(|e| serde_json::from_str(e.details.as_deref().unwrap()).unwrap()).collect();
+    assert_eq!(metadata.len(), 4);
+    assert_eq!(metadata[0]["scope"], "file");
+    assert_eq!(metadata[0]["has_content"], true);
+    assert_eq!(metadata[0]["truncated"], true);
+    assert_eq!(metadata[0]["completeness"], false);
+    assert_eq!(metadata[2]["tool"], "replace_file_content");
+    for item in &metadata { assert_eq!(item["status"], "Succeeded"); }
+    for i in [1, 3] {
+        assert_eq!(metadata[i]["scope"], "file_range");
+        assert_eq!(metadata[i]["offset"], 2);
+        assert_eq!(metadata[i]["limit"], 1);
+        assert_eq!(metadata[i]["has_content"], true);
+        assert_eq!(metadata[i]["completeness"], true);
+        assert_eq!(metadata[i]["truncated"], false);
+    }
+}
+
+#[test]
 fn production_empty_reads_require_full_file_empty_identity_for_inspection() {
     for (name, before, after, inspection, ready) in [
         ("past EOF of nonempty file", "one\nbefore\n", "one\nafter\n",
