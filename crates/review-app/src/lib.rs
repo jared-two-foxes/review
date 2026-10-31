@@ -824,7 +824,8 @@ impl AgentApplication for ReviewApplication {
                 let nonempty_read = info["has_content"].as_bool() != Some(false);
                 if tool == "read_file" && status == "Succeeded" && nonempty_read {
                     has_read_file = true;
-                    if info["scope"].as_str() == Some("file")
+                    if info["has_content"].as_bool() == Some(true)
+                        && info["scope"].as_str() == Some("file")
                         && info["completeness"].as_bool() == Some(true)
                         && info["truncated"].as_bool() != Some(true)
                         && let Some(path) = info["path"].as_str()
@@ -1076,8 +1077,10 @@ mod tests {
         state.scoped_search_queries = vec![first.clone(), second.clone()];
         let recovered = scope_event(&app, &state, json!({"tool":"search_text","query":first,"status":"Succeeded","scope":"repository","completeness":true}));
         assert_eq!(recovered.scoped_search_queries, vec![second]);
+        state.scoped_search_queries = queries;
         let guided = app.with_project_guidance(vec![GuidanceDocument { kind: GuidanceKind::Readme, path: "README.md".into(), content: "guidance-marker".repeat(1_000) }]);
-        let (_, context, omissions) = guided.build_budgeted_context(&state);
+        let (instructions, context, omissions) = guided.build_budgeted_context(&state);
+        assert!(instructions.iter().map(|b| estimate_tokens(&b.content)).sum::<usize>() + context.iter().map(|b| estimate_tokens(&b.content)).sum::<usize>() <= CONTEXT_TOKEN_BUDGET);
         assert!(omissions.is_empty());
         assert!(context.iter().any(|b| b.content.contains("guidance-marker")));
     }
@@ -1100,6 +1103,18 @@ mod tests {
             let full = scope_event(&app, &partial, json!({"tool":"read_file","path":"a","status":status,"scope":"file","has_content":true,"truncated":truncated,"completeness":complete,"content_id":"before-id"}));
             assert_eq!(full.full_file_read_paths == vec![("a".into(), "before-id".into())], expected);
             assert_eq!(full.inspected_paths, vec!["a"]);
+        }
+    }
+
+    #[test]
+    fn full_read_evidence_requires_affirmative_content_metadata() {
+        let (app, initial) = scope_fixture();
+        for metadata in [None, Some(Value::Null), Some(json!("true")), Some(json!(false))] {
+            let mut event = json!({"tool":"read_file","path":"a","status":"Succeeded","scope":"file","completeness":true,"truncated":false,"content_id":"full-id"});
+            if let Some(value) = metadata.clone() { event["has_content"] = value; }
+            let next = scope_event(&app, &initial, event);
+            assert!(next.full_file_read_paths.is_empty());
+            assert_eq!(next.has_read_file, metadata != Some(json!(false)));
         }
     }
 
@@ -1159,6 +1174,17 @@ mod tests {
         assert!(incomplete.has_truncated_search);
         let completion = app.parse_completion(&json!({"findings":[{"blocking":false,"message":"symbol not found","severity":"low"}]})).unwrap();
         assert!(matches!(app.validate_completion(&incomplete, &completion), CompletionDecision::RejectedRemediable { ref reason_codes, .. } if reason_codes == &["negative_evidence_from_truncated_search"]));
+    }
+
+    #[test]
+    fn global_search_proof_rejects_malformed_identity_and_explicit_truncation() {
+        let (app, initial) = scope_fixture();
+        for (head, truncated) in [("short".into(), false), ("z".repeat(40), false), ("a".repeat(40), true)] {
+            let broad = scope_event(&app, &initial, json!({"tool":"search_text","status":"Succeeded","query":"symbol","scope":"repository","completeness":true,"observed_head":head,"truncated":truncated}));
+            assert!(broad.complete_search_evidence.is_empty());
+            let narrowed = scope_event(&app, &broad, json!({"tool":"search_text","status":"Succeeded","query":"symbol","scope":"file","completeness":true,"observed_head":head}));
+            assert_eq!(narrowed.scoped_search_queries, vec!["symbol"]);
+        }
     }
 
     #[test]
@@ -1386,19 +1412,24 @@ mod tests {
         assert!(!state.has_read_file);
         assert!(state.inspected_paths.is_empty());
         state = scope_event(&app, &state, json!({"tool":"list_directory","path":".","status":"Succeeded"}));
+        let assert_insufficient = |state: &ReviewState| {
+            assert!(matches!(app.validate_completion(state, &completion), CompletionDecision::RejectedRemediable { ref reason_codes, .. } if reason_codes == &["insufficient_exploration"]));
+        };
+        assert_insufficient(&state);
         for path in state.changed_files.clone().into_iter().take(20) {
             state = scope_event(&app, &state, json!({"tool":"read_diff","path":path,"status":"Succeeded"}));
         }
+        assert_insufficient(&state);
         for status in ["Failed", "Denied"] {
             let failed = scope_event(&app, &state, json!({"tool":"read_diff","path":"file20.txt","status":status}));
-            assert!(matches!(app.validate_completion(&failed, &completion), CompletionDecision::RejectedRemediable { .. }));
+            assert_insufficient(&failed);
         }
         let complete = scope_event(&app, &state, json!({"tool":"read_diff","path":"file20.txt","status":"Succeeded"}));
         assert!(!complete.has_read_file);
         assert!(matches!(app.validate_completion(&complete, &completion), CompletionDecision::Accepted));
         let mut no_directory = complete;
         no_directory.has_list_directory = false;
-        assert!(matches!(app.validate_completion(&no_directory, &completion), CompletionDecision::RejectedRemediable { .. }));
+        assert_insufficient(&no_directory);
     }
 
     #[test]

@@ -35,6 +35,14 @@ fn tool_value(seen: &[Value], id: &str) -> Value {
     }
     panic!("missing result {id}")
 }
+fn assert_context_ids(seen: &[Value], before: &str, after: &str) {
+    assert!(!seen.is_empty());
+    for observation in seen {
+        let context = observation["context"].to_string();
+        assert!(context.contains(&format!("Expected full-file content_id: {}", content_id_for_bytes(before.as_bytes()))));
+        assert!(context.contains(&format!("Desired full-file content_id: {}", content_id_for_bytes(after.as_bytes()))));
+    }
+}
 fn exercise(sliced_precondition: bool) {
     let dir = tempfile::tempdir().unwrap();
     let output = std::process::Command::new("git").current_dir(dir.path()).args(["init", "-q"]).output().unwrap();
@@ -68,11 +76,7 @@ fn exercise(sliced_precondition: bool) {
         assert_eq!(schema["properties"][name]["type"], "integer");
         assert!(!schema["required"].as_array().unwrap().iter().any(|v| v == name));
     }
-    for observation in seen.iter() {
-        let context = observation["context"].to_string();
-        assert!(context.contains(&format!("Expected full-file content_id: {}", content_id_for_bytes(before.as_bytes()))));
-        assert!(context.contains(&format!("Desired full-file content_id: {}", content_id_for_bytes(after.as_bytes()))));
-    }
+    assert_context_ids(&seen, before, after);
     let instruction = seen[0]["instructions"].to_string();
     assert!(instruction.contains("1-based starting line"));
     assert!(instruction.contains("entire file"));
@@ -139,6 +143,7 @@ fn production_empty_reads_require_full_file_empty_identity_for_inspection() {
         assert_eq!(matches!(result.status, ImplementStatus::CandidateReady), ready, "{name}");
         assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).unwrap(), after, "{name}");
         let seen = seen.lock().unwrap();
+        assert_context_ids(&seen, before, after);
         let inspected = tool_value(&seen, "inspect");
         assert_eq!(inspected["content_id"], content_id_for_bytes(before.as_bytes()), "{name}");
         assert_eq!(inspected["completeness"], true, "{name}");

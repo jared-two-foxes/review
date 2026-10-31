@@ -68,6 +68,7 @@ fn reused_staged_read_file_observes_external_index_updates() {
         let result = tool.execute(&args);
         assert!(matches!(result.status, ToolStatus::Succeeded));
         assert_eq!(result.value["content_id"], sha256_content_id(before.as_bytes()));
+        assert_eq!(result.value["content"], "HEAD line 02\n");
     }
     let after = "new first\nnew second\n";
     std::fs::write(dir.path().join("README.md"), after).unwrap();

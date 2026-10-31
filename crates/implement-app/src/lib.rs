@@ -566,6 +566,10 @@ mod tests {
         empty["has_content"] = json!(false);
         empty["content_id"] = json!(empty_id);
         let mut cases = vec![("nonempty range", valid.clone(), true), ("proven empty", empty.clone(), true)];
+        let mut truncated_nonempty = valid.clone();
+        truncated_nonempty["truncated"] = json!(true);
+        truncated_nonempty["completeness"] = json!(false);
+        cases.push(("nonempty byte-truncated range", truncated_nonempty, true));
         for (name, key, value) in [
             ("past EOF", "content_id", json!(before_id)),
             ("incomplete empty", "completeness", json!(false)),
