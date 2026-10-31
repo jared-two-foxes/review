@@ -360,10 +360,8 @@ impl Tool for ReadFileTool {
         }
         let mut end = start;
         let mut remaining = limit;
-        for line in lines {
-            if remaining == 0 {
-                break;
-            }
+        while remaining > 0 {
+            let Some(line) = lines.next() else { break };
             end += line.len();
             remaining -= 1;
         }
