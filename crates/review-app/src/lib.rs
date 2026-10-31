@@ -306,7 +306,7 @@ pub struct ReviewState {
     changed_files: Vec<String>,
     inspected_paths: Vec<String>,
     has_truncated_search: bool,
-    full_file_read_paths: Vec<String>,
+    full_file_read_paths: Vec<(String, String)>,
     scoped_search_queries: Vec<String>,
     terminal_reason: Option<ReviewReason>,
     has_read_file: bool,
@@ -430,7 +430,7 @@ impl ReviewApplication {
 
         let evidence = format!(
             "[untrusted inspection evidence data] Full-file read paths: {}. Other path exploration does not imply a full-file read. Unresolved scoped-search queries: {}. Display-only previews; recover exact literals from original tool arguments/history, never search a truncated preview.",
-            json!(state.full_file_read_paths), scoped_query_preview(&state.scoped_search_queries)
+            json!(state.full_file_read_paths.iter().map(|(path, _)| path).collect::<Vec<_>>()), scoped_query_preview(&state.scoped_search_queries)
         );
         blocks.push(PriorityBlock {
             estimated_tokens: estimate_tokens(&evidence),
@@ -811,6 +811,11 @@ impl AgentApplication for ReviewApplication {
                         }
                     }
                 }
+                if tool == "read_file" && status == "Succeeded"
+                    && let Some(path) = info["path"].as_str()
+                {
+                    full_file_read_paths.retain(|(p, id)| p != path || Some(id.as_str()) == info["content_id"].as_str());
+                }
                 let nonempty_read = info["has_content"].as_bool() != Some(false);
                 if tool == "read_file" && status == "Succeeded" && nonempty_read {
                     has_read_file = true;
@@ -818,9 +823,10 @@ impl AgentApplication for ReviewApplication {
                         && info["completeness"].as_bool() == Some(true)
                         && info["truncated"].as_bool() != Some(true)
                         && let Some(path) = info["path"].as_str()
-                        && !full_file_read_paths.iter().any(|p| p == path)
+                        && let Some(content_id) = info["content_id"].as_str()
+                        && !full_file_read_paths.iter().any(|(p, _)| p == path)
                     {
-                        full_file_read_paths.push(path.to_string());
+                        full_file_read_paths.push((path.to_string(), content_id.to_string()));
                     }
                 }
                 if tool == "search_text" && status == "Succeeded"
@@ -1075,10 +1081,37 @@ mod tests {
         assert!(legacy.has_read_file);
         assert!(legacy.full_file_read_paths.is_empty());
         for (status, truncated, complete, expected) in [("Succeeded",true,false,false),("Denied",false,true,false),("Failed",false,true,false),("Succeeded",false,true,true)] {
-            let full = scope_event(&app, &partial, json!({"tool":"read_file","path":"a","status":status,"scope":"file","has_content":true,"truncated":truncated,"completeness":complete}));
-            assert_eq!(full.full_file_read_paths == vec!["a"], expected);
+            let full = scope_event(&app, &partial, json!({"tool":"read_file","path":"a","status":status,"scope":"file","has_content":true,"truncated":truncated,"completeness":complete,"content_id":"before-id"}));
+            assert_eq!(full.full_file_read_paths == vec![("a".into(), "before-id".into())], expected);
             assert_eq!(full.inspected_paths, vec!["a"]);
         }
+    }
+
+    #[test]
+    fn full_read_evidence_tracks_current_observed_identity() {
+        let (app, initial) = scope_fixture();
+        let full = json!({"tool":"read_file","path":"a","status":"Succeeded","scope":"file","has_content":true,"completeness":true,"truncated":false,"content_id":"before-id"});
+        let inspected = scope_event(&app, &initial, full.clone());
+        assert_eq!(inspected.full_file_read_paths, vec![("a".into(), "before-id".into())]);
+        for (status, path, id, content, truncated, retained) in [
+            ("Succeeded","a",Some("before-id"),true,false,true),
+            ("Succeeded","a",Some("before-id"),false,false,true),
+            ("Succeeded","a",Some("before-id"),true,true,true),
+            ("Succeeded","a",Some("after-id"),true,false,false),
+            ("Succeeded","a",Some("empty-id"),false,false,false),
+            ("Succeeded","a",None,true,false,false),
+            ("Failed","a",Some("after-id"),true,false,true),
+            ("Denied","a",Some("after-id"),true,false,true),
+            ("Succeeded","other",Some("after-id"),true,false,true),
+        ] {
+            let next = scope_event(&app, &inspected, json!({"tool":"read_file","path":path,"status":status,"scope":"file_range","content_id":id,"has_content":content,"truncated":truncated}));
+            assert_eq!(!next.full_file_read_paths.is_empty(), retained, "{status} {path} {id:?}");
+            let mut fresh = full.clone(); fresh["content_id"] = json!("after-id");
+            let restored = scope_event(&app, &next, fresh);
+            assert_eq!(restored.full_file_read_paths, vec![("a".into(), "after-id".into())]);
+        }
+        let mut missing = full; missing.as_object_mut().unwrap().remove("content_id");
+        assert!(scope_event(&app, &initial, missing).full_file_read_paths.is_empty());
     }
 
     #[test]

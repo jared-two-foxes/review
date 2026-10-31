@@ -156,6 +156,41 @@ fn production_review_ranges_keep_identity_and_require_same_query_global_evidence
     assert!(seen.last().unwrap()["context"].to_string().contains("Full-file read paths: []"));
 }
 #[test]
+fn production_mutable_reads_invalidate_stale_full_file_evidence() {
+    struct MutatingProbe { inner: Probe, root: std::path::PathBuf, staged: bool }
+    impl ModelProvider for MutatingProbe {
+        fn generate(&mut self, r: &CanonicalModelRequest) -> Result<CanonicalModelResponse, ModelError> {
+            if self.inner.seen.lock().unwrap().len() == 2 {
+                std::fs::write(self.root.join("a.txt"), "changed\nsecond\n").unwrap();
+                if self.staged { git(&self.root, &["add", "a.txt"]); }
+            }
+            self.inner.generate(r)
+        }
+        fn generate_with_deadline(&mut self, r: &CanonicalModelRequest, _: std::time::Instant) -> Result<CanonicalModelResponse, ModelError> { self.generate(r) }
+    }
+    for target in [":working", ":staged"] {
+        let dir = fixture(false);
+        let mut req = request(dir.path()); req.head_ref = target.into();
+        let seen = Arc::new(Mutex::new(vec![]));
+        let actions = vec![
+            call("files", "get_changed_files", json!({})),
+            call("full", "read_file", json!({"path":"a.txt"})),
+            call("range", "read_file", json!({"path":"a.txt","offset":1,"limit":1})),
+            ModelAction::CompletionRequest { action_id: "complete".into(), payload: json!({"findings":[{"blocking":false,"message":"Observed changed content","path":"a.txt","severity":"low"}]}) },
+        ];
+        let config = ReviewConfig { max_turns: 4, ..Default::default() };
+        let provider = MutatingProbe { inner: Probe { actions: actions.into(), seen: seen.clone() }, root: dir.path().into(), staged: target == ":staged" };
+        let (result, _) = run_review_with_provider(&req, &config, provider, None).unwrap();
+        assert!(matches!(result.status, ReviewStatus::Approved), "{target}");
+        let seen = seen.lock().unwrap();
+        assert!(seen[2]["context"].to_string().contains("Full-file read paths: [\"a.txt\"]".replace('\"', "\\\"").as_str()));
+        assert!(seen[3]["context"].as_array().unwrap().iter().any(|v| v.as_str().unwrap().contains("Full-file read paths: []")));
+        assert_eq!(tool_value(&seen, "full")["content_id"], content_id_for_bytes(b"one\nneedle\nthree\nfour\n"));
+        assert_eq!(tool_value(&seen, "range")["content_id"], content_id_for_bytes(b"changed\nsecond\n"));
+    }
+}
+
+#[test]
 fn production_large_empty_head_can_complete_with_exhaustive_diffs() {
     let dir = tempfile::tempdir().unwrap();
     git(dir.path(), &["init", "-q"]);
