@@ -346,7 +346,7 @@ impl Tool for ReadFileTool {
         };
         let content_id = format!("{}", content_id_for_bytes(&content_bytes));
         let offset = arguments.get("offset").and_then(Value::as_u64).unwrap_or(1);
-        let limit = arguments.get("limit").and_then(Value::as_u64).unwrap_or(u64::MAX);
+        let limit = arguments.get("limit").and_then(Value::as_u64);
 
         // Select raw LF-inclusive lines before bounding or lossy UTF-8 decoding.
         // Counters avoid offset + limit overflow and narrowing large JSON integers.
@@ -358,13 +358,17 @@ impl Tool for ReadFileTool {
             start += line.len();
             to_skip -= 1;
         }
-        let mut end = start;
-        let mut remaining = limit;
-        while remaining > 0 {
-            let Some(line) = lines.next() else { break };
-            end += line.len();
-            remaining -= 1;
-        }
+        let end = if let Some(mut remaining) = limit {
+            let mut end = start;
+            while remaining > 0 {
+                let Some(line) = lines.next() else { break };
+                end += line.len();
+                remaining -= 1;
+            }
+            end
+        } else {
+            content_bytes.len()
+        };
         let bounded = bound_bytes(&content_bytes[start..end], self.byte_limit);
         let (content, truncated, completeness) =
             (bounded.content, bounded.truncated, bounded.completeness);
