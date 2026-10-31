@@ -57,6 +57,18 @@ The review flow is built around bounded, read-only inspection tools such as:
 
 The runtime includes explicit safety constraints, including denied sensitive paths, bounded output sizes, and completeness signals for truncated results.
 
+### Reading file chunks
+
+The model-facing `read_file` tool accepts a required `path` and two optional line-range arguments:
+
+```json
+{"path": "src/main.rs", "offset": 100, "limit": 40}
+```
+
+This reads lines 100–139 from the selected repository head target. `offset` is a **1-based starting line** (default: 1); `limit` is a **maximum line count** (default: all remaining lines). Either argument can be used alone. Both must be positive integers no larger than `u64::MAX`; zero, negative values, nulls, and unknown arguments are rejected. Existing calls with only `path` keep their behavior.
+
+Ranges stop at EOF; an offset beyond EOF or an empty file returns empty content. Lines are separated by LF, with original line endings (including CRLF), blank lines, and any final unterminated line preserved. The existing byte cap applies **after** selecting lines, so chunks can read beyond the first capped portion of a large file. `truncated` and `completeness` indicate whether the requested range fit within that byte cap, not whether it covers the entire file. `content_id` still hashes the **full file**, and `observed_head` still identifies the selected target. Path security rules are unchanged.
+
 ## CLI shape
 
 The `review-cli` binary supports either:
