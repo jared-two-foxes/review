@@ -86,8 +86,10 @@ fn production_review_ranges_keep_identity_and_require_same_query_global_evidence
     ];
     for offset in 1..=4 { actions.push(call(&format!("range{offset}"), "read_file", json!({"path":"a.txt","offset":offset,"limit":1}))); }
     actions.extend([
-        call("selected-match", "search_text", json!({"query":"needle","path":"a.txt","offset":2,"limit":1})),
-        call("selected-clear", "search_text", json!({"query":"needle"})),
+        // e occurs on lines 1, 2 and 3, so both range boundaries matter.
+        call("selected-match", "search_text", json!({"query":"e","path":"a.txt","offset":2,"limit":1})),
+        call("excluded-match", "search_text", json!({"query":"e","path":"a.txt","offset":4,"limit":1})),
+        call("selected-clear", "search_text", json!({"query":"e"})),
         call("scoped", "search_text", json!({"query":"missing_symbol","path":"a.txt","offset":2,"limit":1})),
         completion("premature", Some("a.txt")),
         call("broad", "search_text", json!({"query":"missing_symbol"})),
@@ -123,6 +125,13 @@ fn production_review_ranges_keep_identity_and_require_same_query_global_evidence
     assert_eq!(matched["matches"].as_array().unwrap().len(), 1);
     assert_eq!(matched["matches"][0]["path"], "a.txt");
     assert_eq!(matched["matches"][0]["line"], 2);
+    assert_eq!(matched["matches"][0]["content"], "needle");
+    let excluded = tool_value(&seen, "excluded-match");
+    assert_eq!(excluded["matches"], json!([]));
+    assert_eq!(excluded["completeness"], true);
+    let unbounded = tool_value(&seen, "selected-clear");
+    assert_eq!(unbounded["matches"].as_array().unwrap().len(), 3);
+    assert_eq!(unbounded["completeness"], true);
     assert!(tool_value(&seen, "scoped")["matches"].as_array().unwrap().is_empty());
     assert_eq!(tool_value(&seen, "scoped")["completeness"], true);
     assert_eq!(tool_value(&seen, "truncated")["truncated"], true);
