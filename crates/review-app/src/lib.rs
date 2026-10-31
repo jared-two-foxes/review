@@ -1074,6 +1074,11 @@ mod tests {
             let shown: Vec<String> = serde_json::from_str(&rendered).unwrap();
             assert!(rendered.len() <= 2048);
             assert!(shown.len() <= 8);
+            if paths.first().is_some_and(|(p, _)| p == "src/0.rs") {
+                assert_eq!(shown.len(), 8);
+                assert_eq!(omitted, 12);
+                assert_eq!(shown, paths.iter().take(8).map(|(p, _)| p.clone()).collect::<Vec<_>>());
+            }
             assert_eq!(shown.len() + omitted, paths.len());
             assert_eq!(shown, paths.iter().take(shown.len()).map(|(p, _)| p.clone()).collect::<Vec<_>>());
             assert_eq!(paths, original);
