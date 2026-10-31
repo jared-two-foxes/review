@@ -584,17 +584,18 @@ impl AgentApplication for ReviewApplication {
 
         // Gate 2: change file coverage.
         if state.changed_files.len() > LARGE_CHANGE_THRESHOLD {
-            // Relaxed: require exploratory coverage
-            if !state.has_read_file || !state.has_list_directory {
+            // Exhaustive diff/path coverage also works when the head files are empty.
+            let exhaustive = state.changed_files.iter().all(|path| state.inspected_paths.contains(path));
+            if (!state.has_read_file && !exhaustive) || !state.has_list_directory {
                 return CompletionDecision::RejectedRemediable {
                     reason_codes: vec!["insufficient_exploration".into()],
                     missing_requirements: vec![format!(
-                        "The change involves {} files.  You must call list_directory and read_file at least once before completing.",
+                        "The change involves {} files.  You must call list_directory and either read nonempty file content or inspect every changed path (for example with read_diff) before completing.",
                         state.changed_files.len()
                     )],
                     feedback_for_model: vec![InstructionBlock {
                         content: format!(
-                            "This is a large change ({} files).  Call list_directory to understand the structure and read_file on relevant files before completing.",
+                            "This is a large change ({} files).  Call list_directory to understand the structure and read_file on relevant nonempty files, or inspect every changed path with read_diff when content reads are empty, before completing.",
                             state.changed_files.len()
                         ),
                     }],
@@ -1291,6 +1292,32 @@ mod tests {
             }
             other => panic!("Gate 4 must reject, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn large_empty_review_requires_exhaustive_successful_diff_coverage_and_directory() {
+        let (app, mut state) = scope_fixture();
+        state.changed_files = (0..21).map(|i| format!("file{i}.txt")).collect();
+        let completion = app.parse_completion(&json!({"findings":[{"blocking":false,"message":"Files were emptied","path":"file0.txt","severity":"low"}]})).unwrap();
+        for path in state.changed_files.clone() {
+            state = scope_event(&app, &state, json!({"tool":"read_file","path":path,"status":"Succeeded","has_content":false}));
+        }
+        assert!(!state.has_read_file);
+        assert!(state.inspected_paths.is_empty());
+        state = scope_event(&app, &state, json!({"tool":"list_directory","path":".","status":"Succeeded"}));
+        for path in state.changed_files.clone().into_iter().take(20) {
+            state = scope_event(&app, &state, json!({"tool":"read_diff","path":path,"status":"Succeeded"}));
+        }
+        for status in ["Failed", "Denied"] {
+            let failed = scope_event(&app, &state, json!({"tool":"read_diff","path":"file20.txt","status":status}));
+            assert!(matches!(app.validate_completion(&failed, &completion), CompletionDecision::RejectedRemediable { .. }));
+        }
+        let complete = scope_event(&app, &state, json!({"tool":"read_diff","path":"file20.txt","status":"Succeeded"}));
+        assert!(!complete.has_read_file);
+        assert!(matches!(app.validate_completion(&complete, &completion), CompletionDecision::Accepted));
+        let mut no_directory = complete;
+        no_directory.has_list_directory = false;
+        assert!(matches!(app.validate_completion(&no_directory, &completion), CompletionDecision::RejectedRemediable { .. }));
     }
 
     #[test]

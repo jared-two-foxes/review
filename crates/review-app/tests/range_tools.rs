@@ -156,6 +156,44 @@ fn production_review_ranges_keep_identity_and_require_same_query_global_evidence
     assert!(seen.last().unwrap()["context"].to_string().contains("Full-file read paths: []"));
 }
 #[test]
+fn production_large_empty_head_can_complete_with_exhaustive_diffs() {
+    let dir = tempfile::tempdir().unwrap();
+    git(dir.path(), &["init", "-q"]);
+    git(dir.path(), &["config", "user.email", "test@example.com"]);
+    git(dir.path(), &["config", "user.name", "Range Test"]);
+    for i in 0..21 { std::fs::write(dir.path().join(format!("file{i}.txt")), "before\n").unwrap(); }
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-qm", "base"]);
+    for i in 0..21 { std::fs::write(dir.path().join(format!("file{i}.txt")), "").unwrap(); }
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-qm", "empty all files"]);
+    for case in ["complete", "partial", "no_directory"] {
+        let mut actions = vec![call("files", "get_changed_files", json!({}))];
+        for i in 0..21 {
+            let path = format!("file{i}.txt");
+            actions.push(call(&format!("empty{i}"), "read_file", json!({"path":path,"offset":999,"limit":1})));
+            if case != "partial" || i != 20 {
+                actions.push(call(&format!("diff{i}"), "read_diff", json!({"path":path})));
+            }
+        }
+        if case != "no_directory" { actions.push(call("list", "list_directory", json!({"path":"."}))); }
+        actions.push(ModelAction::CompletionRequest { action_id: "complete".into(), payload: json!({"findings":[{"blocking":false,"message":"All changed files were emptied","path":"file0.txt","severity":"low"}]}) });
+        let config = ReviewConfig { max_turns: actions.len() as u32, max_tool_calls: 60, ..Default::default() };
+        let seen = Arc::new(Mutex::new(vec![]));
+        let (result, events) = run_review_with_provider(&request(dir.path()), &config, Probe { actions: actions.into(), seen: seen.clone() }, None).unwrap();
+        assert_eq!(matches!(result.status, ReviewStatus::Approved), case == "complete", "{case}");
+        let metadata = summaries(&events);
+        let reads: Vec<_> = metadata.iter().filter(|v| v["tool"] == "read_file").collect();
+        assert_eq!(reads.len(), 21);
+        for read in reads { assert_eq!(read["has_content"], false); assert_eq!(read["content_id"], content_id_for_bytes(b"")); }
+        let seen = seen.lock().unwrap();
+        for i in 0..20 { assert!(tool_value(&seen, &format!("diff{i}"))["content"].as_str().unwrap().contains("-before")); }
+        assert_eq!(tool_value(&seen, "empty0")["content"], "");
+        assert!(seen.last().unwrap()["context"].to_string().contains("Full-file read paths: []"));
+    }
+}
+
+#[test]
 fn global_same_query_recovery_does_not_bypass_original_review_gates() {
     for case in ["coverage", "finding_path", "requirements", "exploration", "skill"] {
         let dir = fixture(matches!(case, "exploration" | "skill"));
