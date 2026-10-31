@@ -74,7 +74,10 @@ impl GitRepo {
 
     /// Return the repository's current index (staged changes).
     pub fn index(&self) -> Result<git2::Index, RepoError> {
-        Ok(self.repo.index()?)
+        let mut index = self.repo.index()?;
+        // libgit2 caches index handles; staged targets must observe later git add operations.
+        index.read(true)?;
+        Ok(index)
     }
 
     pub fn raw_repo(&self) -> &git2::Repository {
