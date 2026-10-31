@@ -276,29 +276,50 @@ impl Tool for ReadFileTool {
     fn description(&self) -> ToolDescription {
         ToolDescription {
             name: self.name().to_string(),
-            description: "Read a file from the repository head.".to_string(),
+            description: "Read a file or line range from the repository head. Line endings are preserved. The byte cap applies to the selected range; truncated/completeness describe that range, while content_id identifies the full file.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["path"],
-                "properties": {"path": {"type": "string"}}
+                "properties": {
+                    "path": {"type": "string"},
+                    "offset": {
+                        "type": "integer", "minimum": 1, "maximum": u64::MAX,
+                        "description": "1-based starting line; defaults to 1. Beyond EOF returns empty content."
+                    },
+                    "limit": {
+                        "type": "integer", "minimum": 1, "maximum": u64::MAX,
+                        "description": "Maximum number of lines to read; defaults to all remaining lines."
+                    }
+                }
             }),
         }
     }
 
     fn validate_arguments(&self, arguments: &Value) -> Result<(), String> {
-        if arguments.get("path").and_then(Value::as_str).is_some()
-            && arguments
-                .as_object()
-                .is_some_and(|object| object.len() == 1)
-        {
+        let valid = arguments.as_object().is_some_and(|object| {
+            object.get("path").and_then(Value::as_str).is_some()
+                && object.keys().all(|key| matches!(key.as_str(), "path" | "offset" | "limit"))
+                && ["offset", "limit"].iter().all(|key| {
+                    object.get(*key).is_none_or(|value| {
+                        value.as_u64().is_some_and(|number| number > 0)
+                    })
+                })
+        });
+        if valid {
             Ok(())
         } else {
-            Err("arguments must contain only a string path".to_string())
+            Err("arguments must contain a string path and only optional positive integer offset and limit (at most u64::MAX)".to_string())
         }
     }
 
     fn execute(&self, arguments: &Value) -> ToolResult {
+        if let Err(error) = self.validate_arguments(arguments) {
+            return ToolResult {
+                status: ToolStatus::Failed,
+                value: json!({"error": error}),
+            };
+        }
         let path = match arguments.get("path").and_then(Value::as_str) {
             Some(p) => p,
             None => {
@@ -324,16 +345,33 @@ impl Tool for ReadFileTool {
             }
         };
         let content_id = format!("{}", content_id_for_bytes(&content_bytes));
-        let (content, truncated, completeness) = if content_bytes.len() > self.byte_limit {
-            let bounded = bound_bytes(&content_bytes, self.byte_limit);
-            (bounded.content, bounded.truncated, bounded.completeness)
+        let offset = arguments.get("offset").and_then(Value::as_u64).unwrap_or(1);
+        let limit = arguments.get("limit").and_then(Value::as_u64);
+
+        // Select raw LF-inclusive lines before bounding or lossy UTF-8 decoding.
+        // Counters avoid offset + limit overflow and narrowing large JSON integers.
+        let mut lines = content_bytes.split_inclusive(|byte| *byte == b'\n');
+        let mut start = 0;
+        let mut to_skip = offset - 1;
+        while to_skip > 0 {
+            let Some(line) = lines.next() else { break };
+            start += line.len();
+            to_skip -= 1;
+        }
+        let end = if let Some(mut remaining) = limit {
+            let mut end = start;
+            while remaining > 0 {
+                let Some(line) = lines.next() else { break };
+                end += line.len();
+                remaining -= 1;
+            }
+            end
         } else {
-            (
-                String::from_utf8_lossy(&content_bytes).into_owned(),
-                false,
-                true,
-            )
+            content_bytes.len()
         };
+        let bounded = bound_bytes(&content_bytes[start..end], self.byte_limit);
+        let (content, truncated, completeness) =
+            (bounded.content, bounded.truncated, bounded.completeness);
 
         ToolResult {
             status: ToolStatus::Succeeded,
