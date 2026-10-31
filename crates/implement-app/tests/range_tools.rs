@@ -145,6 +145,10 @@ fn production_byte_truncation_then_narrow_retry_preserves_full_file_mutation() {
     }
     let metadata: Vec<Value> = events.iter().filter(|e| e.event_type == "kernel.tool_completed").map(|e| serde_json::from_str(e.details.as_deref().unwrap()).unwrap()).collect();
     assert_eq!(metadata.len(), 4);
+    let action_ids: Vec<_> = events.iter().filter(|e| e.event_type == "kernel.tool_completed").map(|e| e.action_id.as_str()).collect();
+    assert_eq!(action_ids, vec!["large", "retry", "mutate", "verify"]);
+    for i in [0, 1] { assert_eq!(metadata[i]["content_id"], content_id_for_bytes(before.as_bytes())); }
+    assert_eq!(metadata[3]["content_id"], content_id_for_bytes(after.as_bytes()));
     assert_eq!(metadata[0]["scope"], "file");
     assert_eq!(metadata[0]["has_content"], true);
     assert_eq!(metadata[0]["truncated"], true);
