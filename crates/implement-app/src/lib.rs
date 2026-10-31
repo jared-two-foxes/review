@@ -316,8 +316,9 @@ impl AgentApplication for ImplementApplication {
             .collect::<Vec<_>>();
         context.push(ContextBlock {
             content: format!(
-                "Implementation target data: modify `{}` only. Expected current content:\n{}\nDesired final content:\n{}\nCandidate readiness requires one successful bounded mutation and one post-mutation verification read whose content matches the requested target state.",
-                state.target_path, state.expected_content, state.desired_content
+                "Implementation target data: modify `{}` only. Expected full-file content_id: {}\nDesired full-file content_id: {}\nExpected current content:\n{}\nDesired final content:\n{}\nCandidate readiness requires one successful bounded mutation and one post-mutation verification read whose content matches the requested target state.",
+                state.target_path, content_id_for_bytes(state.expected_content.as_bytes()),
+                state.desired_content_id, state.expected_content, state.desired_content
             ),
         });
         context
@@ -529,6 +530,25 @@ mod tests {
                 .to_string(),
             ),
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn target_context_exposes_exact_full_file_ids() {
+        let app = ImplementApplication::new_with_sources(
+            FixedClock::new("2025-01-01T00:00:00Z"),
+            SequenceIdGenerator::new(["impl-001"]),
+        );
+        for (before, after) in [("", "é\r\nend"), ("é\r\nend", "")] {
+            let mut request = request();
+            request.expected_content = before.into();
+            request.desired_content = after.into();
+            let state = app.initialize(&request).unwrap().initial_state;
+            let context = app.build_context(&state);
+            let target = &context.last().unwrap().content;
+            assert!(target.contains(&format!("Expected full-file content_id: {}", content_id_for_bytes(before.as_bytes()))));
+            assert!(target.contains(&format!("Desired full-file content_id: {}", content_id_for_bytes(after.as_bytes()))));
+            assert!(target.contains(&format!("Expected current content:\n{before}\nDesired final content:\n{after}\n")));
         }
     }
 

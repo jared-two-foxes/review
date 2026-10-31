@@ -15,6 +15,7 @@ impl ModelProvider for Probe {
         self.seen.lock().unwrap().push(json!({
             "tools":request.tools.iter().map(|t| json!({"name":t.name,"schema":t.input_schema})).collect::<Vec<_>>(),
             "instructions":request.instructions.iter().map(|b| &b.content).collect::<Vec<_>>(),
+            "context":request.context.iter().map(|b| &b.content).collect::<Vec<_>>(),
             "history":history
         }));
         Ok(CanonicalModelResponse { actions: vec![self.actions.pop_front().expect("unexpected extra model turn")], usage: None, reasoning: None })
@@ -66,6 +67,11 @@ fn exercise(sliced_precondition: bool) {
     for name in ["offset", "limit"] {
         assert_eq!(schema["properties"][name]["type"], "integer");
         assert!(!schema["required"].as_array().unwrap().iter().any(|v| v == name));
+    }
+    for observation in seen.iter() {
+        let context = observation["context"].to_string();
+        assert!(context.contains(&format!("Expected full-file content_id: {}", content_id_for_bytes(before.as_bytes()))));
+        assert!(context.contains(&format!("Desired full-file content_id: {}", content_id_for_bytes(after.as_bytes()))));
     }
     let instruction = seen[0]["instructions"].to_string();
     assert!(instruction.contains("1-based starting line"));
