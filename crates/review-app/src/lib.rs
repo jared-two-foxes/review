@@ -53,6 +53,20 @@ fn scoped_query_preview(queries: &[String]) -> String {
     json!({"queries": previews, "omitted": queries.len().saturating_sub(8)}).to_string()
 }
 
+// Presentation only: exact paths and identities remain in state. Never slice a path.
+fn full_file_path_preview(paths: &[(String, String)]) -> (String, usize) {
+    let mut shown = Vec::new();
+    let mut bytes = 2; // JSON array brackets.
+    for (path, _) in paths.iter().take(8) {
+        let added = json!(path).to_string().len() + usize::from(!shown.is_empty());
+        if added > 2048 - bytes { break; }
+        bytes += added;
+        shown.push(path.as_str());
+    }
+    let omitted = paths.len() - shown.len();
+    (json!(shown).to_string(), omitted)
+}
+
 const REVIEW_BASE_INSTRUCTION: &str = range_aware_review_instruction!("Review the code change in this repository. Before each tool call, briefly state what you are checking and why. Begin by calling get_change_summary to inspect the change and get_changed_files to enumerate every changed file, then call read_diff, read_file, list_directory, get_project_guidance, or search_text as needed. Use get_project_guidance on relevant paths to discover README/AGENTS guidance before deeper exploration. When you have enough information, issue a completion with your findings as a JSON object of the form {\"findings\":[{\"blocking\": <bool>, \"message\": \"<string>\", \"path\": <optional or null>, \"line\": <optional or null>, \"severity\": \"<high|medium|low>\", \"recommendation\": <optional or null>}]}. Include the required severity field on every finding, include path, line, and recommendation when applicable, and include every actionable issue you found. Do not return an empty findings array; identify the most relevant concrete observation from the inspected change.");
 
 pub struct ReviewConfig {
@@ -430,9 +444,10 @@ impl ReviewApplication {
             estimated_tokens: estimate_tokens(REVIEW_BASE_INSTRUCTION),
         });
 
+        let (full_paths, omitted_paths) = full_file_path_preview(&state.full_file_read_paths);
         let evidence = format!(
-            "[untrusted inspection evidence data] Full-file read paths: {}. Other path exploration does not imply a full-file read. Unresolved scoped-search queries: {}. Display-only previews; recover exact literals from original tool arguments/history, never search a truncated preview.",
-            json!(state.full_file_read_paths.iter().map(|(path, _)| path).collect::<Vec<_>>()), scoped_query_preview(&state.scoped_search_queries)
+            "[untrusted inspection evidence data] Full-file read paths: {}. Other path exploration does not imply a full-file read. Unresolved scoped-search queries: {}. Display-only previews; recover exact literals from original tool arguments/history, never search a truncated preview. Omitted full-file paths: {}; recover omitted paths from original tool history.",
+            full_paths, scoped_query_preview(&state.scoped_search_queries), omitted_paths
         );
         blocks.push(PriorityBlock {
             estimated_tokens: estimate_tokens(&evidence),
@@ -1044,6 +1059,36 @@ mod tests {
     }
 
     #[test]
+    fn full_file_path_display_bounds_count_and_serialized_bytes_without_slicing() {
+        let cases: Vec<Vec<(String, String)>> = vec![
+            vec![],
+            (0..20).map(|i| (format!("src/{i}.rs"), format!("id-{i}"))).collect(),
+            vec![("x".repeat(2044), "boundary".into()), ("next".into(), "id".into())],
+            vec![("x".repeat(2045), "over".into())],
+            vec![("x".repeat(100_000), "huge".into())],
+            (0..20).map(|i| (format!("{i}{}", "é🦊\n\"\\\u{0}".repeat(100)), format!("unicode-{i}"))).collect(),
+        ];
+        for paths in cases {
+            let original = paths.clone();
+            let (rendered, omitted) = full_file_path_preview(&paths);
+            let shown: Vec<String> = serde_json::from_str(&rendered).unwrap();
+            assert!(rendered.len() <= 2048);
+            assert!(shown.len() <= 8);
+            assert_eq!(shown.len() + omitted, paths.len());
+            assert_eq!(shown, paths.iter().take(shown.len()).map(|(p, _)| p.clone()).collect::<Vec<_>>());
+            assert_eq!(paths, original);
+        }
+        let paths = vec![("x".repeat(2044), "boundary".into()), ("next".into(), "id".into())];
+        let (rendered, omitted) = full_file_path_preview(&paths);
+        assert_eq!(rendered.len(), 2048);
+        assert_eq!(omitted, 1);
+        let paths = vec![("é🦊\n\"\\\u{0}".into(), "unicode".into())];
+        let (rendered, omitted) = full_file_path_preview(&paths);
+        assert_eq!(serde_json::from_str::<Vec<String>>(&rendered).unwrap(), vec![paths[0].0.clone()]);
+        assert_eq!(omitted, 0);
+    }
+
+    #[test]
     fn scoped_query_display_is_bounded_without_changing_literal_identity() {
         let (app, initial) = scope_fixture();
         let queries: Vec<String> = ["x".repeat(100_000), "é🦊".repeat(20_000), "\u{0}\n\"\\".repeat(25_000)].into_iter().cycle().take(30).collect();
@@ -1078,11 +1123,20 @@ mod tests {
         let recovered = scope_event(&app, &state, json!({"tool":"search_text","query":first,"status":"Succeeded","scope":"repository","completeness":true}));
         assert_eq!(recovered.scoped_search_queries, vec![second]);
         state.scoped_search_queries = queries;
+        state.full_file_read_paths = (0..1_000).map(|i| (format!("src/{i}/{}.rs", "é🦊\n\"\\".repeat(100)), format!("content-id-{i}"))).collect();
+        let exact_paths = state.full_file_read_paths.clone();
+        let (path_preview, omitted_paths) = full_file_path_preview(&exact_paths);
+        assert!(omitted_paths > 0);
         let guided = app.with_project_guidance(vec![GuidanceDocument { kind: GuidanceKind::Readme, path: "README.md".into(), content: "guidance-marker".repeat(1_000) }]);
         let (instructions, context, omissions) = guided.build_budgeted_context(&state);
         assert!(instructions.iter().map(|b| estimate_tokens(&b.content)).sum::<usize>() + context.iter().map(|b| estimate_tokens(&b.content)).sum::<usize>() <= CONTEXT_TOKEN_BUDGET);
         assert!(omissions.is_empty());
         assert!(context.iter().any(|b| b.content.contains("guidance-marker")));
+        let evidence = &context.last().unwrap().content;
+        assert!(evidence.len() < 10_000);
+        assert!(evidence.contains(&path_preview));
+        assert!(evidence.contains(&format!("Omitted full-file paths: {omitted_paths}")));
+        assert_eq!(state.full_file_read_paths, exact_paths);
     }
 
     #[test]
