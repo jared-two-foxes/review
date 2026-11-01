@@ -60,6 +60,30 @@ fn make_repo_with_head_file() -> (TempDir, String) {
 }
 
 #[test]
+fn reused_staged_read_file_observes_external_index_updates() {
+    let (dir, before) = make_repo_with_head_file();
+    let tool = ReadFileTool::new(GitRepo::open(dir.path()).unwrap(), ReviewTarget::Index, usize::MAX, SecurityPolicy::new());
+    let args = json!({"path":"README.md","offset":2,"limit":1});
+    for _ in 0..2 {
+        let result = tool.execute(&args);
+        assert!(matches!(result.status, ToolStatus::Succeeded));
+        assert_eq!(result.value["content_id"], sha256_content_id(before.as_bytes()));
+        assert_eq!(result.value["content"], "HEAD line 02\n");
+    }
+    let after = "new first\nnew second\n";
+    std::fs::write(dir.path().join("README.md"), after).unwrap();
+    assert!(Command::new("git").args(["-c","core.autocrlf=false","add","README.md"]).current_dir(dir.path()).output().unwrap().status.success());
+    let index_before = std::fs::read(dir.path().join(".git/index")).unwrap();
+    for _ in 0..2 {
+        let result = tool.execute(&args);
+        assert!(matches!(result.status, ToolStatus::Succeeded));
+        assert_eq!(result.value["content"], "new second\n");
+        assert_eq!(result.value["content_id"], sha256_content_id(after.as_bytes()));
+    }
+    assert_eq!(std::fs::read(dir.path().join(".git/index")).unwrap(), index_before);
+}
+
+#[test]
 fn read_file_returns_head_content_id_and_completeness_metadata() {
     let (dir, head_content) = make_repo_with_head_file();
     let repo = GitRepo::open(dir.path()).unwrap();

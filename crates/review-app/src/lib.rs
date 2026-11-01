@@ -1,5 +1,12 @@
 // Application scaffolding for the end-to-end test.
 
+// Keep base and general-skill range guidance byte-for-byte consistent.
+macro_rules! range_aware_review_instruction {
+    ($base:literal) => {
+        concat!($base, " Prefer bounded read_file context around diff or search locations. offset is a 1-based starting line and limit counts file lines, not matches. Use search_text path when the file is known; omit path for repository discovery. If a read is byte-truncated, request a smaller line range rather than repeating the same full-file read; never advance by the requested limit when fewer lines were returned. Expand scope when needed. completeness describes only the requested scope: a partial read is not a full-file inspection, and a scoped search cannot establish repository-wide absence. Use complete unbounded same-query searches to support absence claims, while respecting existing ignore and security visibility.")
+    };
+}
+
 pub mod skills;
 
 use agent_kernel::application::{
@@ -36,7 +43,31 @@ use std::time::Duration;
 
 const LARGE_CHANGE_THRESHOLD: usize = 20;
 
-const REVIEW_BASE_INSTRUCTION: &str = "Review the code change in this repository. Before each tool call, briefly state what you are checking and why. Begin by calling get_change_summary to inspect the change and get_changed_files to enumerate every changed file, then call read_diff, read_file, list_directory, get_project_guidance, or search_text as needed. Use get_project_guidance on relevant paths to discover README/AGENTS guidance before deeper exploration. When you have enough information, issue a completion with your findings as a JSON object of the form {\"findings\":[{\"blocking\": <bool>, \"message\": \"<string>\", \"path\": <optional or null>, \"line\": <optional or null>, \"severity\": \"<high|medium|low>\", \"recommendation\": <optional or null>}]}. Include the required severity field on every finding, include path, line, and recommendation when applicable, and include every actionable issue you found. Do not return an empty findings array; identify the most relevant concrete observation from the inspected change.";
+// Presentation only: exact literal queries remain in state for evidence matching.
+fn scoped_query_preview(queries: &[String]) -> String {
+    let previews: Vec<_> = queries.iter().take(8).map(|query| {
+        let mut end = query.len().min(96);
+        while !query.is_char_boundary(end) { end -= 1; }
+        json!({"preview": &query[..end], "truncated": end < query.len()})
+    }).collect();
+    json!({"queries": previews, "omitted": queries.len().saturating_sub(8)}).to_string()
+}
+
+// Presentation only: exact paths and identities remain in state. Never slice a path.
+fn full_file_path_preview(paths: &[(String, String)]) -> (String, usize) {
+    let mut shown = Vec::new();
+    let mut bytes = 2; // JSON array brackets.
+    for (path, _) in paths.iter().take(8) {
+        let added = json!(path).to_string().len() + usize::from(!shown.is_empty());
+        if added > 2048 - bytes { break; }
+        bytes += added;
+        shown.push(path.as_str());
+    }
+    let omitted = paths.len() - shown.len();
+    (json!(shown).to_string(), omitted)
+}
+
+const REVIEW_BASE_INSTRUCTION: &str = range_aware_review_instruction!("Review the code change in this repository. Before each tool call, briefly state what you are checking and why. Begin by calling get_change_summary to inspect the change and get_changed_files to enumerate every changed file, then call read_diff, read_file, list_directory, get_project_guidance, or search_text as needed. Use get_project_guidance on relevant paths to discover README/AGENTS guidance before deeper exploration. When you have enough information, issue a completion with your findings as a JSON object of the form {\"findings\":[{\"blocking\": <bool>, \"message\": \"<string>\", \"path\": <optional or null>, \"line\": <optional or null>, \"severity\": \"<high|medium|low>\", \"recommendation\": <optional or null>}]}. Include the required severity field on every finding, include path, line, and recommendation when applicable, and include every actionable issue you found. Do not return an empty findings array; identify the most relevant concrete observation from the inspected change.");
 
 pub struct ReviewConfig {
     pub model: String,
@@ -281,7 +312,7 @@ pub fn run_review_with_sources<C: Clock, I: IdGenerator>(
     serde_json::to_vec(&result).expect("review result is serializable")
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ReviewState {
     inspected: bool,
     findings: Vec<Finding>,
@@ -289,6 +320,10 @@ pub struct ReviewState {
     changed_files: Vec<String>,
     inspected_paths: Vec<String>,
     has_truncated_search: bool,
+    full_file_read_paths: Vec<(String, String)>,
+    scoped_search_queries: Vec<String>,
+    complete_search_evidence: Vec<(String, String)>,
+    mutable_search_target: bool,
     terminal_reason: Option<ReviewReason>,
     has_read_file: bool,
     has_list_directory: bool,
@@ -409,6 +444,18 @@ impl ReviewApplication {
             estimated_tokens: estimate_tokens(REVIEW_BASE_INSTRUCTION),
         });
 
+        let (full_paths, omitted_paths) = full_file_path_preview(&state.full_file_read_paths);
+        let evidence = format!(
+            "[untrusted inspection evidence data] Full-file read paths: {}. Other path exploration does not imply a full-file read. Unresolved scoped-search queries: {}. Display-only previews; recover exact literals from original tool arguments/history, never search a truncated preview. Omitted full-file paths: {}; recover omitted paths from original tool history.",
+            full_paths, scoped_query_preview(&state.scoped_search_queries), omitted_paths
+        );
+        blocks.push(PriorityBlock {
+            estimated_tokens: estimate_tokens(&evidence),
+            content: evidence,
+            priority: ContextPriority::Required,
+            is_instruction: false,
+        });
+
         // First pass: pre-seed total_tokens with the size of all Required blocks.
         // Required blocks are always included regardless of budget so their
         // tokens are reserved upfront.
@@ -497,6 +544,10 @@ impl AgentApplication for ReviewApplication {
                 changed_files: vec![],
                 inspected_paths: vec![],
                 has_truncated_search: false,
+                full_file_read_paths: vec![],
+                scoped_search_queries: vec![],
+                complete_search_evidence: vec![],
+                mutable_search_target: matches!(request.head_ref.as_str(), ":working" | ":staged"),
                 terminal_reason: None,
                 has_read_file: false,
                 has_list_directory: false,
@@ -552,17 +603,18 @@ impl AgentApplication for ReviewApplication {
 
         // Gate 2: change file coverage.
         if state.changed_files.len() > LARGE_CHANGE_THRESHOLD {
-            // Relaxed: require exploratory coverage
-            if !state.has_read_file || !state.has_list_directory {
+            // Exhaustive diff/path coverage also works when the head files are empty.
+            let exhaustive = state.changed_files.iter().all(|path| state.inspected_paths.contains(path));
+            if (!state.has_read_file && !exhaustive) || !state.has_list_directory {
                 return CompletionDecision::RejectedRemediable {
                     reason_codes: vec!["insufficient_exploration".into()],
                     missing_requirements: vec![format!(
-                        "The change involves {} files.  You must call list_directory and read_file at least once before completing.",
+                        "The change involves {} files.  You must call list_directory and either read nonempty file content or inspect every changed path (for example with read_diff) before completing.",
                         state.changed_files.len()
                     )],
                     feedback_for_model: vec![InstructionBlock {
                         content: format!(
-                            "This is a large change ({} files).  Call list_directory to understand the structure and read_file on relevant files before completing.",
+                            "This is a large change ({} files).  Call list_directory to understand the structure and read_file on relevant nonempty files, or inspect every changed path with read_diff when content reads are empty, before completing.",
                             state.changed_files.len()
                         ),
                     }],
@@ -669,7 +721,9 @@ impl AgentApplication for ReviewApplication {
         }
 
         // Gate 6: findings claiming absence cannot rely on truncated searches
-        if state.has_truncated_search {
+        // Conservative: findings cannot be mechanically attributed to individual
+        // literal queries, so any unresolved scoped query limits absence claims.
+        if state.has_truncated_search || !state.scoped_search_queries.is_empty() {
             let absence_phrases = [
                 "no occurrence",
                 "not found",
@@ -693,13 +747,21 @@ impl AgentApplication for ReviewApplication {
                 .collect();
             if !absence_findings.is_empty() {
                 return CompletionDecision::RejectedRemediable {
-                    reason_codes: vec!["negative_evidence_from_truncated_search".into()],
+                    reason_codes: vec![if state.has_truncated_search {
+                        "negative_evidence_from_truncated_search"
+                    } else {
+                        "negative_evidence_from_scoped_search"
+                    }.into()],
                     missing_requirements: vec![format!(
-                        "The following findings claim absence but a search was truncated (results incomplete): {}",
+                        "The following findings claim absence but search evidence is incomplete or scope-limited: {}",
                         absence_findings.join(", ")
                     )],
                     feedback_for_model: vec![InstructionBlock {
-                        content: "One or more searches returned incomplete results.  Findings claiming something does not exist are not supported by a truncated search.  Re-run the search with a more specific query or remove the absence claim.".into(),
+                        content: if state.has_truncated_search {
+                            "One or more searches returned incomplete results.  Findings claiming something does not exist are not supported by a truncated search.  Re-run the search with a more specific query or remove the absence claim.".into()
+                        } else {
+                            format!("Scoped completeness is not repository-wide evidence. Run each unresolved literal query without path, offset or limit and obtain complete results, or remove the absence claim. Unresolved queries (display-only previews; recover exact literals from original tool arguments/history, never search a truncated preview): {}", scoped_query_preview(&state.scoped_search_queries))
+                        },
                     }],
                 };
             }
@@ -748,6 +810,9 @@ impl AgentApplication for ReviewApplication {
             let mut changed_files = state.changed_files.clone();
             let mut inspected_paths = state.inspected_paths.clone();
             let mut has_truncated_search = state.has_truncated_search;
+            let mut full_file_read_paths = state.full_file_read_paths.clone();
+            let mut scoped_search_queries = state.scoped_search_queries.clone();
+            let mut complete_search_evidence = state.complete_search_evidence.clone();
             let mut has_read_file = state.has_read_file;
             let mut has_list_directory = state.has_list_directory;
 
@@ -766,13 +831,52 @@ impl AgentApplication for ReviewApplication {
                         }
                     }
                 }
-                if tool == "read_file" && status == "Succeeded" {
+                if tool == "read_file" && status == "Succeeded"
+                    && let Some(path) = info["path"].as_str()
+                {
+                    full_file_read_paths.retain(|(p, id)| p != path || Some(id.as_str()) == info["content_id"].as_str());
+                }
+                let nonempty_read = info["has_content"].as_bool() != Some(false);
+                if tool == "read_file" && status == "Succeeded" && nonempty_read {
                     has_read_file = true;
+                    if info["has_content"].as_bool() == Some(true)
+                        && info["scope"].as_str() == Some("file")
+                        && info["completeness"].as_bool() == Some(true)
+                        && info["truncated"].as_bool() != Some(true)
+                        && let Some(path) = info["path"].as_str()
+                        && let Some(content_id) = info["content_id"].as_str()
+                        && !full_file_read_paths.iter().any(|(p, _)| p == path)
+                    {
+                        full_file_read_paths.push((path.to_string(), content_id.to_string()));
+                    }
+                }
+                if tool == "search_text" && status == "Succeeded"
+                    && let Some(query) = info["query"].as_str()
+                {
+                    let immutable_head = info["observed_head"].as_str().filter(|head| {
+                        !state.mutable_search_target && head.len() == 40 && head.bytes().all(|b| b.is_ascii_hexdigit())
+                    });
+                    match info["scope"].as_str() {
+                        Some("repository") if info["completeness"].as_bool() == Some(true) && info["truncated"].as_bool() != Some(true) => {
+                            scoped_search_queries.retain(|q| q != query);
+                            if let Some(head) = immutable_head
+                                && !complete_search_evidence.iter().any(|(q, h)| q == query && h == head)
+                            { complete_search_evidence.push((query.into(), head.into())); }
+                        }
+                        Some("file" | "file_range" | "repository_line_ranges") => {
+                            let covered = immutable_head.is_some_and(|head| complete_search_evidence.iter().any(|(q, h)| q == query && h == head));
+                            if !covered && !scoped_search_queries.iter().any(|q| q == query) {
+                                scoped_search_queries.push(query.to_string());
+                            }
+                        }
+                        _ => {}
+                    }
                 }
                 if tool == "list_directory" && status == "Succeeded" {
                     has_list_directory = true;
                 }
                 if (tool == "read_file" || tool == "read_diff" || tool == "list_directory")
+                    && (tool != "read_file" || nonempty_read)
                     && status == "Succeeded"
                     && let Some(path) = info["path"].as_str()
                     && !inspected_paths.contains(&path.to_string())
@@ -795,6 +899,10 @@ impl AgentApplication for ReviewApplication {
                 changed_files,
                 inspected_paths,
                 has_truncated_search,
+                full_file_read_paths,
+                scoped_search_queries,
+                complete_search_evidence,
+                mutable_search_target: state.mutable_search_target,
                 terminal_reason,
                 has_read_file,
                 has_list_directory,
@@ -807,6 +915,10 @@ impl AgentApplication for ReviewApplication {
                 changed_files: state.changed_files.clone(),
                 inspected_paths: state.inspected_paths.clone(),
                 has_truncated_search: state.has_truncated_search,
+                full_file_read_paths: state.full_file_read_paths.clone(),
+                scoped_search_queries: state.scoped_search_queries.clone(),
+                complete_search_evidence: state.complete_search_evidence.clone(),
+                mutable_search_target: state.mutable_search_target,
                 terminal_reason,
                 has_read_file: state.has_read_file,
                 has_list_directory: state.has_list_directory,
@@ -928,6 +1040,237 @@ impl Tool for ReadChangeTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scope_fixture() -> (ReviewApplication, ReviewState) {
+        let app = ReviewApplication::new_with_sources(
+            agent_protocol::FixedClock::new("2025-01-01T00:00:00Z"),
+            agent_protocol::SequenceIdGenerator::new(["review"]),
+        );
+        let request = ReviewRequest { schema: "review.request/v1".into(),
+            repository_path: ".".into(), base_ref: "HEAD~1".into(),
+            head_ref: "HEAD".into(), requirements: None };
+        let state = app.initialize(&request).unwrap().initial_state;
+        (app, state)
+    }
+
+    fn scope_event(app: &ReviewApplication, state: &ReviewState, details: Value) -> ReviewState {
+        app.reduce_event(state, &LedgerEvent { event_type: "kernel.tool_completed".into(),
+            details: Some(details.to_string()), ..Default::default() })
+    }
+
+    #[test]
+    fn full_file_path_display_bounds_count_and_serialized_bytes_without_slicing() {
+        let cases: Vec<Vec<(String, String)>> = vec![
+            vec![],
+            (0..20).map(|i| (format!("src/{i}.rs"), format!("id-{i}"))).collect(),
+            vec![("x".repeat(2044), "boundary".into()), ("next".into(), "id".into())],
+            vec![("x".repeat(2045), "over".into())],
+            vec![("x".repeat(100_000), "huge".into())],
+            (0..20).map(|i| (format!("{i}{}", "é🦊\n\"\\\u{0}".repeat(100)), format!("unicode-{i}"))).collect(),
+        ];
+        for paths in cases {
+            let original = paths.clone();
+            let (rendered, omitted) = full_file_path_preview(&paths);
+            let shown: Vec<String> = serde_json::from_str(&rendered).unwrap();
+            assert!(rendered.len() <= 2048);
+            assert!(shown.len() <= 8);
+            if paths.first().is_some_and(|(p, _)| p == "src/0.rs") {
+                assert_eq!(shown.len(), 8);
+                assert_eq!(omitted, 12);
+                assert_eq!(shown, paths.iter().take(8).map(|(p, _)| p.clone()).collect::<Vec<_>>());
+            }
+            assert_eq!(shown.len() + omitted, paths.len());
+            assert_eq!(shown, paths.iter().take(shown.len()).map(|(p, _)| p.clone()).collect::<Vec<_>>());
+            assert_eq!(paths, original);
+        }
+        let paths = vec![("x".repeat(2044), "boundary".into()), ("next".into(), "id".into())];
+        let (rendered, omitted) = full_file_path_preview(&paths);
+        assert_eq!(rendered.len(), 2048);
+        assert_eq!(omitted, 1);
+        let paths = vec![("é🦊\n\"\\\u{0}".into(), "unicode".into())];
+        let (rendered, omitted) = full_file_path_preview(&paths);
+        assert_eq!(serde_json::from_str::<Vec<String>>(&rendered).unwrap(), vec![paths[0].0.clone()]);
+        assert_eq!(omitted, 0);
+    }
+
+    #[test]
+    fn scoped_query_display_is_bounded_without_changing_literal_identity() {
+        let (app, initial) = scope_fixture();
+        let queries: Vec<String> = ["x".repeat(100_000), "é🦊".repeat(20_000), "\u{0}\n\"\\".repeat(25_000)].into_iter().cycle().take(30).collect();
+        let preview = scoped_query_preview(&queries);
+        assert!(preview.len() < 6_000);
+        let parsed: Value = serde_json::from_str(&preview).unwrap();
+        assert_eq!(parsed["omitted"], 22);
+        assert_eq!(parsed["queries"].as_array().unwrap().len(), 8);
+        for item in parsed["queries"].as_array().unwrap() {
+            assert!(item["preview"].as_str().unwrap().len() <= 96);
+            assert_eq!(item["truncated"], true);
+        }
+        let mut state = initial;
+        state.inspected = true;
+        state.scoped_search_queries = queries.clone();
+        let (_, context, _) = app.build_budgeted_context(&state);
+        let evidence = &context.last().unwrap().content;
+        assert!(evidence.len() < 7_000);
+        assert!(evidence.contains(&preview));
+        let completion = app.parse_completion(&json!({"findings":[{"blocking":false,"message":"symbol not found","severity":"low"}]})).unwrap();
+        match app.validate_completion(&state, &completion) {
+            CompletionDecision::RejectedRemediable { feedback_for_model, .. } => {
+                assert!(feedback_for_model[0].content.len() < 7_000);
+                assert!(feedback_for_model[0].content.contains(&preview));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(state.scoped_search_queries, queries);
+        let first = format!("{}A", "x".repeat(200));
+        let second = format!("{}B", "x".repeat(200));
+        state.scoped_search_queries = vec![first.clone(), second.clone()];
+        let recovered = scope_event(&app, &state, json!({"tool":"search_text","query":first,"status":"Succeeded","scope":"repository","completeness":true}));
+        assert_eq!(recovered.scoped_search_queries, vec![second]);
+        state.scoped_search_queries = queries;
+        state.full_file_read_paths = (0..1_000).map(|i| (format!("src/{i}/{}.rs", "é🦊\n\"\\".repeat(100)), format!("content-id-{i}"))).collect();
+        let exact_paths = state.full_file_read_paths.clone();
+        let (path_preview, omitted_paths) = full_file_path_preview(&exact_paths);
+        assert!(omitted_paths > 0);
+        let guided = app.with_project_guidance(vec![GuidanceDocument { kind: GuidanceKind::Readme, path: "README.md".into(), content: "guidance-marker".repeat(1_000) }]);
+        let (instructions, context, omissions) = guided.build_budgeted_context(&state);
+        assert!(instructions.iter().map(|b| estimate_tokens(&b.content)).sum::<usize>() + context.iter().map(|b| estimate_tokens(&b.content)).sum::<usize>() <= CONTEXT_TOKEN_BUDGET);
+        assert!(omissions.is_empty());
+        assert!(context.iter().any(|b| b.content.contains("guidance-marker")));
+        let evidence = &context.last().unwrap().content;
+        assert!(evidence.len() < 10_000);
+        assert!(evidence.contains(&path_preview));
+        assert!(evidence.contains(&format!("Omitted full-file paths: {omitted_paths}")));
+        assert_eq!(state.full_file_read_paths, exact_paths);
+    }
+
+    #[test]
+    fn ranged_reads_distinguish_empty_partial_full_and_legacy_evidence() {
+        let (app, initial) = scope_fixture();
+        let empty = scope_event(&app, &initial, json!({"tool":"read_file","path":"a","status":"Succeeded","scope":"file_range","has_content":false,"completeness":true}));
+        assert!(!empty.has_read_file);
+        assert!(empty.inspected_paths.is_empty());
+        assert!(empty.full_file_read_paths.is_empty());
+        let partial = scope_event(&app, &empty, json!({"tool":"read_file","path":"a","status":"Succeeded","scope":"file_range","has_content":true,"completeness":true}));
+        assert!(partial.has_read_file);
+        assert_eq!(partial.inspected_paths, vec!["a"]);
+        assert!(partial.full_file_read_paths.is_empty());
+        let legacy = scope_event(&app, &initial, json!({"tool":"read_file","path":"a","status":"Succeeded"}));
+        assert!(legacy.has_read_file);
+        assert!(legacy.full_file_read_paths.is_empty());
+        for (status, truncated, complete, expected) in [("Succeeded",true,false,false),("Denied",false,true,false),("Failed",false,true,false),("Succeeded",false,true,true)] {
+            let full = scope_event(&app, &partial, json!({"tool":"read_file","path":"a","status":status,"scope":"file","has_content":true,"truncated":truncated,"completeness":complete,"content_id":"before-id"}));
+            assert_eq!(full.full_file_read_paths == vec![("a".into(), "before-id".into())], expected);
+            assert_eq!(full.inspected_paths, vec!["a"]);
+        }
+    }
+
+    #[test]
+    fn full_read_evidence_requires_affirmative_content_metadata() {
+        let (app, initial) = scope_fixture();
+        for metadata in [None, Some(Value::Null), Some(json!("true")), Some(json!(false))] {
+            let mut event = json!({"tool":"read_file","path":"a","status":"Succeeded","scope":"file","completeness":true,"truncated":false,"content_id":"full-id"});
+            if let Some(value) = metadata.clone() { event["has_content"] = value; }
+            let next = scope_event(&app, &initial, event);
+            assert!(next.full_file_read_paths.is_empty());
+            assert_eq!(next.has_read_file, metadata != Some(json!(false)));
+        }
+    }
+
+    #[test]
+    fn full_read_evidence_tracks_current_observed_identity() {
+        let (app, initial) = scope_fixture();
+        let full = json!({"tool":"read_file","path":"a","status":"Succeeded","scope":"file","has_content":true,"completeness":true,"truncated":false,"content_id":"before-id"});
+        let inspected = scope_event(&app, &initial, full.clone());
+        assert_eq!(inspected.full_file_read_paths, vec![("a".into(), "before-id".into())]);
+        for (status, path, id, content, truncated, retained) in [
+            ("Succeeded","a",Some("before-id"),true,false,true),
+            ("Succeeded","a",Some("before-id"),false,false,true),
+            ("Succeeded","a",Some("before-id"),true,true,true),
+            ("Succeeded","a",Some("after-id"),true,false,false),
+            ("Succeeded","a",Some("empty-id"),false,false,false),
+            ("Succeeded","a",None,true,false,false),
+            ("Failed","a",Some("after-id"),true,false,true),
+            ("Denied","a",Some("after-id"),true,false,true),
+            ("Succeeded","other",Some("after-id"),true,false,true),
+        ] {
+            let next = scope_event(&app, &inspected, json!({"tool":"read_file","path":path,"status":status,"scope":"file_range","content_id":id,"has_content":content,"truncated":truncated}));
+            assert_eq!(!next.full_file_read_paths.is_empty(), retained, "{status} {path} {id:?}");
+            let mut fresh = full.clone(); fresh["content_id"] = json!("after-id");
+            let restored = scope_event(&app, &next, fresh);
+            assert_eq!(restored.full_file_read_paths, vec![("a".into(), "after-id".into())]);
+        }
+        let mut missing = full; missing.as_object_mut().unwrap().remove("content_id");
+        assert!(scope_event(&app, &initial, missing).full_file_read_paths.is_empty());
+    }
+
+    #[test]
+    fn immutable_global_evidence_survives_only_same_query_same_observation_narrowing() {
+        let (app, initial) = scope_fixture();
+        let head = "a".repeat(40);
+        let global = json!({"tool":"search_text","status":"Succeeded","query":"symbol","scope":"repository","completeness":true,"observed_head":head});
+        for (mutable, status, complete, observed, query, scoped_head, unresolved) in [
+            (false,"Succeeded",true,Some(head.as_str()),"symbol",Some(head.as_str()),false),
+            (true,"Succeeded",true,Some(head.as_str()),"symbol",Some(head.as_str()),true),
+            (false,"Failed",true,Some(head.as_str()),"symbol",Some(head.as_str()),true),
+            (false,"Denied",true,Some(head.as_str()),"symbol",Some(head.as_str()),true),
+            (false,"Succeeded",false,Some(head.as_str()),"symbol",Some(head.as_str()),true),
+            (false,"Succeeded",true,None,"symbol",Some(head.as_str()),true),
+            (false,"Succeeded",true,Some(head.as_str()),"other",Some(head.as_str()),true),
+            (false,"Succeeded",true,Some(head.as_str()),"symbol",None,true),
+            (false,"Succeeded",true,Some(head.as_str()),"symbol",Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),true),
+        ] {
+            let mut initial = initial.clone(); initial.mutable_search_target = mutable;
+            let mut event = global.clone(); event["status"] = json!(status); event["completeness"] = json!(complete); event["observed_head"] = json!(observed);
+            let broad = scope_event(&app, &initial, event);
+            for scope in ["file","file_range","repository_line_ranges"] {
+                let narrowed = scope_event(&app, &broad, json!({"tool":"search_text","status":"Succeeded","query":query,"scope":scope,"completeness":true,"observed_head":scoped_head}));
+                assert_eq!(!narrowed.scoped_search_queries.is_empty(), unresolved);
+            }
+        }
+        let broad = scope_event(&app, &initial, global);
+        let incomplete = scope_event(&app, &broad, json!({"tool":"search_text","status":"Succeeded","query":"symbol","scope":"file","completeness":false,"observed_head":head}));
+        assert!(incomplete.has_truncated_search);
+        let completion = app.parse_completion(&json!({"findings":[{"blocking":false,"message":"symbol not found","severity":"low"}]})).unwrap();
+        assert!(matches!(app.validate_completion(&incomplete, &completion), CompletionDecision::RejectedRemediable { ref reason_codes, .. } if reason_codes == &["negative_evidence_from_truncated_search"]));
+    }
+
+    #[test]
+    fn global_search_proof_rejects_malformed_identity_and_explicit_truncation() {
+        let (app, initial) = scope_fixture();
+        for (head, truncated) in [("short".into(), false), ("z".repeat(40), false), ("a".repeat(40), true)] {
+            let broad = scope_event(&app, &initial, json!({"tool":"search_text","status":"Succeeded","query":"symbol","scope":"repository","completeness":true,"observed_head":head,"truncated":truncated}));
+            assert!(broad.complete_search_evidence.is_empty());
+            let narrowed = scope_event(&app, &broad, json!({"tool":"search_text","status":"Succeeded","query":"symbol","scope":"file","completeness":true,"observed_head":head}));
+            assert_eq!(narrowed.scoped_search_queries, vec!["symbol"]);
+        }
+    }
+
+    #[test]
+    fn scoped_absence_requires_successful_complete_same_query_broadening() {
+        let (app, initial) = scope_fixture();
+        let completion = app.parse_completion(&json!({"findings":[{"blocking":false,"message":"symbol not found","severity":"low"}]})).unwrap();
+        for scope in ["file", "file_range", "repository_line_ranges"] {
+            let scoped = scope_event(&app, &initial, json!({"tool":"search_text","query":"symbol","status":"Succeeded","scope":scope,"completeness":true}));
+            assert_eq!(scoped.scoped_search_queries, vec!["symbol"]);
+            match app.validate_completion(&scoped, &completion) {
+                CompletionDecision::RejectedRemediable { reason_codes, .. } => assert_eq!(reason_codes, vec!["negative_evidence_from_scoped_search"]),
+                other => panic!("{other:?}"),
+            }
+            for (status, complete, query, scope) in [("Failed",true,"symbol","repository"),("Denied",true,"symbol","repository"),("Succeeded",false,"symbol","repository"),("Succeeded",true,"other","repository"),("Succeeded",true,"symbol","unknown")] {
+                let limited = scope_event(&app, &scoped, json!({"tool":"search_text","query":query,"status":status,"scope":scope,"completeness":complete}));
+                assert_eq!(limited.scoped_search_queries, vec!["symbol"]);
+            }
+        }
+        let scoped = scope_event(&app, &initial, json!({"tool":"search_text","query":"symbol","status":"Succeeded","scope":"file","completeness":true}));
+        let broad = scope_event(&app, &scoped, json!({"tool":"search_text","query":"symbol","status":"Succeeded","scope":"repository","completeness":true}));
+        assert!(broad.scoped_search_queries.is_empty());
+        assert!(matches!(app.validate_completion(&broad, &completion), CompletionDecision::Accepted));
+        let truncated = scope_event(&app, &scoped, json!({"tool":"search_text","query":"symbol","status":"Succeeded","scope":"repository","completeness":false}));
+        let retried = scope_event(&app, &truncated, json!({"tool":"search_text","query":"symbol","status":"Succeeded","scope":"repository","completeness":true}));
+        assert!(retried.has_truncated_search);
+        assert!(matches!(app.validate_completion(&retried, &completion), CompletionDecision::RejectedRemediable { .. }));
+    }
 
     #[test]
     fn reduce_event_populates_changed_files_from_changed_files_key() {
@@ -1085,7 +1428,10 @@ mod tests {
             findings: vec![],
             requirements: None,
             changed_files,
+            full_file_read_paths: vec![],
+            scoped_search_queries: vec![],
             inspected_paths: vec!["src/file_0.rs".into()], // only one inspected
+            complete_search_evidence: vec![], mutable_search_target: false,
             has_truncated_search: false,
             terminal_reason: None,
             has_read_file: true,
@@ -1115,6 +1461,37 @@ mod tests {
     }
 
     #[test]
+    fn large_empty_review_requires_exhaustive_successful_diff_coverage_and_directory() {
+        let (app, mut state) = scope_fixture();
+        state.changed_files = (0..21).map(|i| format!("file{i}.txt")).collect();
+        let completion = app.parse_completion(&json!({"findings":[{"blocking":false,"message":"Files were emptied","path":"file0.txt","severity":"low"}]})).unwrap();
+        for path in state.changed_files.clone() {
+            state = scope_event(&app, &state, json!({"tool":"read_file","path":path,"status":"Succeeded","has_content":false}));
+        }
+        assert!(!state.has_read_file);
+        assert!(state.inspected_paths.is_empty());
+        state = scope_event(&app, &state, json!({"tool":"list_directory","path":".","status":"Succeeded"}));
+        let assert_insufficient = |state: &ReviewState| {
+            assert!(matches!(app.validate_completion(state, &completion), CompletionDecision::RejectedRemediable { ref reason_codes, .. } if reason_codes == &["insufficient_exploration"]));
+        };
+        assert_insufficient(&state);
+        for path in state.changed_files.clone().into_iter().take(20) {
+            state = scope_event(&app, &state, json!({"tool":"read_diff","path":path,"status":"Succeeded"}));
+        }
+        assert_insufficient(&state);
+        for status in ["Failed", "Denied"] {
+            let failed = scope_event(&app, &state, json!({"tool":"read_diff","path":"file20.txt","status":status}));
+            assert_insufficient(&failed);
+        }
+        let complete = scope_event(&app, &state, json!({"tool":"read_diff","path":"file20.txt","status":"Succeeded"}));
+        assert!(!complete.has_read_file);
+        assert!(matches!(app.validate_completion(&complete, &completion), CompletionDecision::Accepted));
+        let mut no_directory = complete;
+        no_directory.has_list_directory = false;
+        assert_insufficient(&no_directory);
+    }
+
+    #[test]
     fn relaxed_mode_accepts_with_exploratory_coverage() {
         let app = ReviewApplication::new_with_sources(
             agent_protocol::FixedClock::new("2025-01-01T00:00:00Z"),
@@ -1126,7 +1503,10 @@ mod tests {
             findings: vec![],
             requirements: None,
             changed_files,
+            full_file_read_paths: vec![],
+            scoped_search_queries: vec![],
             inspected_paths: vec!["src/file_0.rs".into()],
+            complete_search_evidence: vec![], mutable_search_target: false,
             has_truncated_search: false,
             terminal_reason: None,
             has_read_file: true,
@@ -1163,7 +1543,10 @@ mod tests {
             findings: vec![],
             requirements: None,
             changed_files: changed_files.clone(),
+            full_file_read_paths: vec![],
+            scoped_search_queries: vec![],
             inspected_paths: vec!["src/file_0.rs".into(), "src/file_1.rs".into()],
+            complete_search_evidence: vec![], mutable_search_target: false,
             has_truncated_search: false,
             terminal_reason: None,
             has_read_file: true,
@@ -1219,7 +1602,10 @@ mod context_budgeting_tests {
             findings: vec![],
             requirements: None,
             changed_files: changed_files.iter().map(|s| s.to_string()).collect(),
+            complete_search_evidence: vec![], mutable_search_target: false,
             inspected_paths: vec![],
+            full_file_read_paths: vec![],
+            scoped_search_queries: vec![],
             has_truncated_search: false,
             terminal_reason: None,
             has_read_file: false,
