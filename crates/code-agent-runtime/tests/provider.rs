@@ -35,8 +35,80 @@ fn model_prefix_routing_accepts_opencode_prefix() {
     let route = resolve_provider_route("opencode/zen", Some("test-key"))
         .expect("opencode prefix should route successfully");
     assert_eq!(route.model, "zen");
-    assert_eq!(route.provider_root, "https://opencode.ai/zen/v1");
+    assert_eq!(
+        route.provider_root,
+        "https://opencode.ai/inference/openai/v1"
+    );
     assert_eq!(route.api_key, "test-key");
+}
+
+#[test]
+fn opencode_routes_claude_to_anthropic_messages_endpoint() {
+    let route = resolve_provider_route("opencode/claude-sonnet-4-5", Some("test-key"))
+        .expect("opencode claude should route");
+    assert_eq!(route.api_style, ApiStyle::Messages);
+    assert_eq!(
+        route.provider_root,
+        "https://opencode.ai/inference/anthropic/v1"
+    );
+}
+
+#[test]
+fn opencode_routes_gpt6_to_openai_responses_endpoint() {
+    let route = resolve_provider_route("opencode/gpt-6-luna", Some("test-key"))
+        .expect("opencode gpt-6 should route");
+    assert_eq!(route.api_style, ApiStyle::Responses);
+    assert_eq!(
+        route.provider_root,
+        "https://opencode.ai/inference/openai/v1"
+    );
+}
+
+#[test]
+fn opencode_routes_muse_wonder_to_responses() {
+    let route = resolve_provider_route("opencode/muse-wonder-1.0", Some("test-key"))
+        .expect("opencode muse-wonder should route");
+    assert_eq!(route.api_style, ApiStyle::Responses);
+}
+
+#[test]
+fn opencode_routes_qwen_flash_to_messages() {
+    let route = resolve_provider_route("opencode/qwen3.8-flash", Some("test-key"))
+        .expect("opencode qwen3.8-flash should route");
+    assert_eq!(route.api_style, ApiStyle::Messages);
+    assert_eq!(
+        route.provider_root,
+        "https://opencode.ai/inference/anthropic/v1"
+    );
+}
+
+#[test]
+fn opencode_routes_qwen_plus_to_messages() {
+    let route = resolve_provider_route("opencode/qwen3.6-plus", Some("test-key"))
+        .expect("opencode qwen3.6-plus should route");
+    assert_eq!(route.api_style, ApiStyle::Messages);
+}
+
+#[test]
+fn opencode_routes_qwen_max_to_chat_completions() {
+    let route = resolve_provider_route("opencode/qwen3.8-max", Some("test-key"))
+        .expect("opencode qwen3.8-max should route");
+    assert_eq!(route.api_style, ApiStyle::ChatCompletions);
+    assert_eq!(
+        route.provider_root,
+        "https://opencode.ai/inference/openai/v1"
+    );
+}
+
+#[test]
+fn opencode_routes_gemini_to_chat_completions() {
+    let route = resolve_provider_route("opencode/gemini-4-argon", Some("test-key"))
+        .expect("opencode gemini should route");
+    assert_eq!(route.api_style, ApiStyle::ChatCompletions);
+    assert_eq!(
+        route.provider_root,
+        "https://opencode.ai/inference/openai/v1"
+    );
 }
 
 #[test]
@@ -873,7 +945,11 @@ fn openai_provider_captures_reasoning_coext_alongside_tool_calls() {
         Some("Let me check the changed files first."),
         "reasoning co-text must be captured when present alongside tool calls"
     );
-    assert_eq!(response.actions.len(), 1, "tool call must still be captured");
+    assert_eq!(
+        response.actions.len(),
+        1,
+        "tool call must still be captured"
+    );
     match &response.actions[0] {
         ModelAction::ToolCall { tool, .. } => {
             assert_eq!(tool, "get_changed_files");
