@@ -284,11 +284,11 @@ impl Tool for ReadFileTool {
                 "properties": {
                     "path": {"type": "string"},
                     "offset": {
-                        "type": "integer", "minimum": 1, "maximum": u64::MAX,
+                        "type": "integer", "minimum": 1, "maximum": u32::MAX,
                         "description": "1-based starting line; defaults to 1. Beyond EOF returns empty content."
                     },
                     "limit": {
-                        "type": "integer", "minimum": 1, "maximum": u64::MAX,
+                        "type": "integer", "minimum": 1, "maximum": u32::MAX,
                         "description": "Maximum number of lines to read; defaults to all remaining lines."
                     }
                 }
@@ -309,7 +309,7 @@ impl Tool for ReadFileTool {
         if valid {
             Ok(())
         } else {
-            Err("arguments must contain a string path and only optional positive integer offset and limit (at most u64::MAX)".to_string())
+            Err("arguments must contain a string path and only optional positive integer offset and limit (at most u32::MAX)".to_string())
         }
     }
 
@@ -1117,11 +1117,11 @@ impl Tool for SearchTextTool {
                         "description": "Exact repository-relative file path using forward slashes, without empty, dot or parent components, backslashes or colons. Defaults to all searchable files."
                     },
                     "offset": {
-                        "type": "integer", "minimum": 1, "maximum": u64::MAX,
+                        "type": "integer", "minimum": 1, "maximum": u32::MAX,
                         "description": "1-based starting line in each file; defaults to 1. Beyond EOF returns no matches."
                     },
                     "limit": {
-                        "type": "integer", "minimum": 1, "maximum": u64::MAX,
+                        "type": "integer", "minimum": 1, "maximum": u32::MAX,
                         "description": "Maximum number of lines to search in each file, not a match count; defaults to all remaining lines."
                     }
                 }
@@ -1147,7 +1147,7 @@ impl Tool for SearchTextTool {
         if valid {
             Ok(())
         } else {
-            Err("arguments must contain a string query and only optional repository-relative path and positive integer offset/limit (at most u64::MAX)".to_string())
+            Err("arguments must contain a string query and only optional repository-relative path and positive integer offset/limit (at most u32::MAX)".to_string())
         }
     }
 

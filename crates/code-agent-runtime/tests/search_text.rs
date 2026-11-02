@@ -323,7 +323,7 @@ fn search_text_validates_optional_scope_and_advertises_schema() {
     for key in ["offset", "limit"] {
         assert_eq!(schema["properties"][key]["type"], "integer");
         assert_eq!(schema["properties"][key]["minimum"], 1);
-        assert_eq!(schema["properties"][key]["maximum"], json!(u64::MAX));
+        assert_eq!(schema["properties"][key]["maximum"], json!(u32::MAX));
         for bad in [
             json!(0),
             json!(-1),
@@ -382,7 +382,7 @@ fn search_text_validates_optional_scope_and_advertises_schema() {
         json!({"query": "x", "path": "src/one.txt"}),
         json!({"query": "x", "offset": 2}),
         json!({"query": "x", "limit": 2}),
-        json!({"query": "x", "path": "src/one.txt", "offset": u64::MAX, "limit": u64::MAX}),
+        json!({"query": "x", "path": "src/one.txt", "offset": u32::MAX, "limit": u32::MAX}),
     ] {
         assert!(validator.is_valid(&args), "schema rejected {args}");
         tool.validate_arguments(&args).unwrap();
@@ -417,13 +417,14 @@ fn search_text_integer_representations_agree_with_schema_and_execution() {
                 ("1e0", 1),
                 ("3.0", 3),
                 ("3e0", 3),
-                ("9007199254740992.0", 9007199254740992),
-                ("18446744073709549568.0", 18446744073709549568),
-                ("18446744073709551615", u64::MAX),
+                ("4294967295", u32::MAX as u64),
             ] {
                 let mut args = json!({"query": "foo.bar", "path": "src/one.txt"});
                 args[key] = serde_json::from_str(literal).unwrap();
-                assert!(validator.is_valid(&args), "{target}: schema rejected {args}");
+                assert!(
+                    validator.is_valid(&args),
+                    "{target}: schema rejected {args}"
+                );
                 tool.validate_arguments(&args).unwrap();
                 let result = tool.execute(&args);
                 assert!(matches!(result.status, ToolStatus::Succeeded), "{args}");
@@ -458,7 +459,10 @@ fn search_text_integer_representations_agree_with_schema_and_execution() {
             ] {
                 let mut args = json!({"query": "foo.bar", "path": "src/one.txt"});
                 args[key] = serde_json::from_str(literal).unwrap();
-                assert!(!validator.is_valid(&args), "{target}: schema accepted {args}");
+                assert!(
+                    !validator.is_valid(&args),
+                    "{target}: schema accepted {args}"
+                );
                 assert!(tool.validate_arguments(&args).is_err(), "{target}: {args}");
                 assert!(matches!(tool.execute(&args).status, ToolStatus::Failed));
             }
