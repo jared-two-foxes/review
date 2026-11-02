@@ -197,12 +197,16 @@ fn resolve_api_style(provider: &str, model: &str) -> ApiStyle {
         }
         "anthropic" => ApiStyle::Messages,
         "opencode" => {
-            if model.starts_with("claude-") {
+            if model.starts_with("claude-")
+                || model.starts_with("qwen3.8-flash")
+                || model.starts_with("qwen3.6-plus")
+                || model.starts_with("qwen3.5-plus")
+            {
                 ApiStyle::Messages
             } else if model.starts_with("gpt-5")
                 || model.starts_with("gpt-6")
                 || model.starts_with("grok")
-                || model.starts_with("muse-spark")
+                || model.starts_with("muse-")
             {
                 ApiStyle::Responses
             } else {
@@ -237,25 +241,36 @@ pub fn resolve_provider_route_with_root(
                 provider
             ));
         }
-        let (default_base_url, default_api_key) = match provider.as_str() {
+        let api_style = resolve_api_style(provider.as_str(), provider_model);
+
+        let (default_base_url, default_api_key): (String, String) = match provider.as_str() {
             "openai" => (
-                "https://api.openai.com/v1",
+                "https://api.openai.com/v1".to_string(),
                 std::env::var("OPENAI_API_KEY").unwrap_or_default(),
             ),
             "anthropic" => (
-                "https://api.anthropic.com/v1",
+                "https://api.anthropic.com/v1".to_string(),
                 std::env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
             ),
             "ollama" => (
-                "http://127.0.0.1:11434/v1",
+                "http://127.0.0.1:11434/v1".to_string(),
                 std::env::var("OLLAMA_API_KEY").unwrap_or_else(|_| "ollama".into()),
             ),
-            "opencode" => (
-                "https://opencode.ai/zen/v1",
-                std::env::var("OPENCODE_API_KEY").unwrap_or_default(),
-            ),
+            "opencode" => {
+                let inference_root = std::env::var("OPENCODE_BASE_URL")
+                    .unwrap_or_else(|_| "https://opencode.ai/inference".to_string());
+                let base = match api_style {
+                    ApiStyle::Responses | ApiStyle::ChatCompletions => {
+                        format!("{}/openai/v1", inference_root.trim_end_matches('/'))
+                    }
+                    ApiStyle::Messages => {
+                        format!("{}/anthropic/v1", inference_root.trim_end_matches('/'))
+                    }
+                };
+                (base, std::env::var("OPENCODE_API_KEY").unwrap_or_default())
+            }
             "copilot" | "github-copilot" => (
-                "https://api.githubcopilot.com",
+                "https://api.githubcopilot.com".to_string(),
                 std::env::var("COPILOT_API_TOKEN")
                     .ok()
                     .filter(|t| !t.is_empty())
@@ -274,12 +289,10 @@ pub fn resolve_provider_route_with_root(
             }
         };
 
-        let api_style = resolve_api_style(provider.as_str(), provider_model);
-
         return Ok(ProviderRoute {
             model: provider_model.to_string(),
             provider_root: explicit_provider_root
-                .unwrap_or(default_base_url)
+                .unwrap_or(&default_base_url)
                 .trim_end_matches('/')
                 .to_string(),
             provider: provider.to_string(),

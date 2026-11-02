@@ -104,10 +104,10 @@ Common flags include:
 
 Provider routing is model-driven:
 
-- The default `--model opencode/gpt-5.6-terra` routes to OpenCode Zen (`OPENCODE_API_KEY`). Unprefixed models route to OpenAI (`OPENAI_API_KEY`).
+- The default `--model opencode/gpt-5.6-terra` routes to OpenCode Console (`OPENCODE_API_KEY`). Unprefixed models route to OpenAI (`OPENAI_API_KEY`).
 - `--model openai/<model-name>` routes to OpenAI (`OPENAI_API_KEY`)
 - `--model ollama/<model-name>` routes to Ollama (`http://127.0.0.1:11434/v1/chat/completions`)
-- `--model opencode/<model-name>` routes to OpenCode Zen (`https://opencode.ai/zen/v1`, `OPENCODE_API_KEY`). Claude models (`claude-*`) use `/messages`; GPT-5/6, Grok and Muse Spark use `/responses`; other models use `/chat/completions`.
+- `--model opencode/<model-name>` routes to OpenCode Console (`OPENCODE_API_KEY`). The base URL is `https://opencode.ai/inference/openai/v1` for Responses and Chat Completions models, or `https://opencode.ai/inference/anthropic/v1` for Messages models. Claude (`claude-*`) and Qwen Flash/Plus (`qwen3.8-flash`, `qwen3.6-plus`, `qwen3.5-plus`) use `/messages`; GPT-5/6, Grok and Muse use `/responses`; other models (including Gemini, Qwen Max, DeepSeek, GLM, Kimi, Mistral) use `/chat/completions`. Set `OPENCODE_BASE_URL` to override the inference root (e.g. `https://opencode.ai/inference/go` for a Go subscription).
 - `--model anthropic/<model-name>` routes to the Anthropic Messages API (`https://api.anthropic.com/v1/messages`, `ANTHROPIC_API_KEY`).
 - `--model copilot/<model-name>` or `--model github-copilot/<model-name>` routes to GitHub Copilot (`GITHUB_TOKEN`)
 
@@ -168,6 +168,7 @@ To use a live provider path, set `OPENAI_API_KEY`. Optional environment variable
 - `REVIEW_MODEL`
 - `REVIEW_BASE_URL`
 - `REVIEW_LIVE_TEST`
+- `OPENCODE_BASE_URL` — overrides the OpenCode Console inference root (default `https://opencode.ai/inference`; set to `https://opencode.ai/inference/go` for a Go subscription)
 
 ## Development and testing
 
