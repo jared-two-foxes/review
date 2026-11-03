@@ -938,7 +938,9 @@ impl OpenAiProvider {
         let resp = self.http_post(&body_str, per_request_timeout)?;
 
         let status = resp.status();
-        if status.as_u16() == 429 {
+        if matches!(status.as_u16(), 401 | 403) {
+            return Err(ModelError::Authentication(format!("HTTP {}", status.as_u16())));
+        } else if status.as_u16() == 429 {
             return Err(ModelError::RateLimit(format!(
                 "Rate limit: {}",
                 status.as_u16()
@@ -983,7 +985,7 @@ impl OpenAiProvider {
         let mut req = self
             .auth
             .amend(req, deadline)
-            .map_err(|e| ModelError::ApiError(e.to_string()))?;
+            .map_err(|_| ModelError::Authentication("credential refresh failed".into()))?;
         if let Some(t) = timeout {
             req = req.timeout(t);
         }
@@ -991,7 +993,7 @@ impl OpenAiProvider {
             if e.is_timeout() {
                 ModelError::Timeout(e.to_string())
             } else {
-                ModelError::ApiError(e.to_string())
+                ModelError::Network(e.without_url().to_string())
             }
         })
     }

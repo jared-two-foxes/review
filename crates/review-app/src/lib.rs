@@ -67,7 +67,7 @@ fn full_file_path_preview(paths: &[(String, String)]) -> (String, usize) {
     (json!(shown).to_string(), omitted)
 }
 
-const REVIEW_BASE_INSTRUCTION: &str = range_aware_review_instruction!("Review the code change in this repository. Before each tool call, briefly state what you are checking and why. Begin by calling get_change_summary to inspect the change and get_changed_files to enumerate every changed file, then call read_diff, read_file, list_directory, get_project_guidance, or search_text as needed. Use get_project_guidance on relevant paths to discover README/AGENTS guidance before deeper exploration. When you have enough information, issue a completion with your findings as a JSON object of the form {\"findings\":[{\"blocking\": <bool>, \"message\": \"<string>\", \"path\": <optional or null>, \"line\": <optional or null>, \"severity\": \"<high|medium|low>\", \"recommendation\": <optional or null>}]}. Include the required severity field on every finding, include path, line, and recommendation when applicable, and include every actionable issue you found. Do not return an empty findings array; identify the most relevant concrete observation from the inspected change.");
+const REVIEW_BASE_INSTRUCTION: &str = range_aware_review_instruction!("Review the code change in this repository. Before each tool call, briefly state what you are checking and why. Begin by calling get_change_summary to inspect the change and get_changed_files to enumerate every changed file, then call read_diff, read_file, list_directory, get_project_guidance, or search_text as needed. Use get_project_guidance on relevant paths to discover README/AGENTS guidance before deeper exploration. When you have enough information, issue a completion with your findings as a JSON object of the form {\"findings\":[{\"blocking\": <bool>, \"message\": \"<string>\", \"path\": <optional or null>, \"line\": <optional or null>, \"severity\": \"<high|medium|low>\", \"recommendation\": <optional or null>}]}. Include the required severity field on every finding, include path, line, and recommendation when applicable, and include every actionable issue you found. When requirements list persisted obligations, also return obligation_assessments: [{obligation_id, disposition: verified|unresolved|not_applicable, evidence}]. Assess each supplied stable ID against inspected source and checks; never infer resolution from an author claim. Do not return an empty findings array; identify the most relevant concrete observation from the inspected change.");
 
 pub struct ReviewConfig {
     pub model: String,
@@ -154,11 +154,12 @@ pub fn run_review(
                 schema: "review.result/v1".to_string(),
                 status: ReviewStatus::Indeterminate,
                 reason: ReviewReason::ReviewEngineNotAvailable,
-                review_id: String::new(),
-                completed_at: String::new(),
+                review_id: RandomIdGenerator::new().next_id(),
+                completed_at: SystemClock::new().now(),
                 findings: vec![],
                 usage: UsageSummary::default(),
                 skills: vec![],
+                obligation_assessments: vec![],
             },
             vec![],
             Some(reason),
@@ -308,6 +309,7 @@ pub fn run_review_with_sources<C: Clock, I: IdGenerator>(
         findings: vec![],
         usage: UsageSummary::default(),
         skills: vec![],
+                obligation_assessments: vec![],
     };
     serde_json::to_vec(&result).expect("review result is serializable")
 }
@@ -332,6 +334,8 @@ pub struct ReviewState {
 #[derive(Debug, Deserialize, Clone)]
 pub struct ReviewCompletion {
     pub findings: Vec<Finding>,
+    #[serde(default)]
+    pub obligation_assessments: Vec<review_protocol::ObligationAssessment>,
 }
 
 #[derive(Clone, Deserialize, Debug)]
@@ -788,6 +792,15 @@ impl AgentApplication for ReviewApplication {
             };
         }
 
+        if completion.obligation_assessments.iter().any(|a|
+            a.obligation_id.trim().is_empty() || a.evidence.trim().is_empty() ||
+            !["verified", "unresolved", "not_applicable"].contains(&a.disposition.as_str())) {
+            return CompletionDecision::RejectedRemediable {
+                reason_codes: vec!["invalid_obligation_assessment".into()],
+                missing_requirements: vec!["Assess stable obligation IDs with concrete evidence".into()],
+                feedback_for_model: vec![],
+            };
+        }
         // All gates passed.
         *self.pending_completion.borrow_mut() = Some(completion.clone());
         *self.completion_accepted.borrow_mut() = true;
@@ -797,7 +810,15 @@ impl AgentApplication for ReviewApplication {
     fn reduce_event(&self, state: &Self::State, event: &LedgerEvent) -> Self::State {
         let terminal_reason = match event.event_type.as_str() {
             "kernel.tool_completed" => state.terminal_reason.clone(),
-            "kernel.model_failed" => Some(ReviewReason::ModelFailure),
+            "kernel.model_failed" => Some(match event.details.as_deref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                .and_then(|v| v["category"].as_str().map(str::to_owned)).as_deref() {
+                    Some("authentication") => ReviewReason::AuthenticationFailure,
+                    Some("network") => ReviewReason::NetworkFailure,
+                    Some("provider") => ReviewReason::ProviderFailure,
+                    Some("rate_limit") => ReviewReason::RateLimited,
+                    _ => ReviewReason::ModelFailure,
+                }),
             "kernel.session_budget_exhausted" => Some(ReviewReason::BudgetExhausted),
             "kernel.session_stalled" => Some(ReviewReason::SessionStalled),
             "kernel.session_limit_exceeded" => Some(ReviewReason::LimitExceeded),
@@ -1000,6 +1021,8 @@ impl AgentApplication for ReviewApplication {
                 estimated_cost_usd: usage.estimated_cost_usd,
             },
             skills: skill_outputs,
+            obligation_assessments: if accepted { pending.as_ref()
+                .map(|c| c.obligation_assessments.clone()).unwrap_or_default() } else { vec![] },
         }
     }
 }
@@ -1438,6 +1461,7 @@ mod tests {
             has_list_directory: true,
         };
         let completion = ReviewCompletion {
+            obligation_assessments: vec![],
             findings: vec![Finding {
                 blocking: false,
                 message: "issue found".into(),
@@ -1513,6 +1537,7 @@ mod tests {
             has_list_directory: true,
         };
         let completion = ReviewCompletion {
+            obligation_assessments: vec![],
             findings: vec![Finding {
                 blocking: false,
                 message: "looks good".into(),
@@ -1553,6 +1578,7 @@ mod tests {
             has_list_directory: true,
         };
         let completion = ReviewCompletion {
+            obligation_assessments: vec![],
             findings: vec![Finding {
                 blocking: false,
                 message: "ok".into(),

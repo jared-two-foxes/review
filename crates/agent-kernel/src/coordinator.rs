@@ -159,7 +159,12 @@ where
                         turn,
                         "",
                         "kernel.model_failed",
-                        Some(format!("{:?}", e)),
+                        Some(serde_json::json!({"category": match &e {
+                            crate::model::ModelError::Authentication(_) => "authentication",
+                            crate::model::ModelError::Network(_) | crate::model::ModelError::Timeout(_) => "network",
+                            crate::model::ModelError::RateLimit(_) => "rate_limit",
+                            crate::model::ModelError::ApiError(_) => "provider",
+                        }}).to_string()),
                     );
                     self.append_event(&session_id, turn, "", "kernel.session_indeterminate");
                     return (

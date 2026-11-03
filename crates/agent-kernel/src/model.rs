@@ -5,6 +5,7 @@ use crate::application::{ContextBlock, InstructionBlock};
 
 #[derive(Debug, Clone)]
 pub enum ModelError {
+    Authentication(String),
     Network(String),
     Timeout(String),
     ApiError(String),

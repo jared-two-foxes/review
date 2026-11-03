@@ -15,7 +15,7 @@
     },
     "reason": {
       "type": "string",
-      "enum": ["REVIEW_ENGINE_NOT_AVAILABLE", "REVIEW_COMPLETED"]
+      "enum": ["REVIEW_ENGINE_NOT_AVAILABLE", "REVIEW_COMPLETED", "MODEL_FAILURE", "BUDGET_EXHAUSTED", "SESSION_STALLED", "LIMIT_EXCEEDED", "CANCELLED", "AUTHENTICATION_FAILURE", "NETWORK_FAILURE", "PROVIDER_FAILURE", "RATE_LIMITED"]
     },
     "review_id": {
       "type": "string"
@@ -47,6 +47,18 @@
         "input_tokens": { "type": "integer" },
         "output_tokens": { "type": "integer" },
         "estimated_cost_usd": { "type": ["number", "null"] }
+      }
+    },
+    "obligation_assessments": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["obligation_id", "disposition", "evidence"],
+        "properties": {
+          "obligation_id": {"type": "string", "minLength": 1},
+          "disposition": {"type": "string", "enum": ["verified", "unresolved", "not_applicable"]},
+          "evidence": {"type": "string", "minLength": 1}
+        }
       }
     },
     "skills": {

@@ -28,6 +28,14 @@ pub enum ReviewReason {
     LimitExceeded,
     #[serde(rename = "CANCELLED")]
     Cancelled,
+    #[serde(rename = "AUTHENTICATION_FAILURE")]
+    AuthenticationFailure,
+    #[serde(rename = "NETWORK_FAILURE")]
+    NetworkFailure,
+    #[serde(rename = "PROVIDER_FAILURE")]
+    ProviderFailure,
+    #[serde(rename = "RATE_LIMITED")]
+    RateLimited,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -65,6 +73,14 @@ pub struct SkillOutput {
     pub content_hash: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObligationAssessment {
+    pub obligation_id: String,
+    pub disposition: String,
+    pub evidence: String,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewResult {
@@ -77,6 +93,8 @@ pub struct ReviewResult {
     pub usage: UsageSummary,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<SkillOutput>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub obligation_assessments: Vec<ObligationAssessment>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -142,7 +160,7 @@ fn review_schema() -> String {
     },
     "reason": {
       "type": "string",
-      "enum": ["REVIEW_ENGINE_NOT_AVAILABLE", "REVIEW_COMPLETED"]
+      "enum": ["REVIEW_ENGINE_NOT_AVAILABLE", "REVIEW_COMPLETED", "MODEL_FAILURE", "BUDGET_EXHAUSTED", "SESSION_STALLED", "LIMIT_EXCEEDED", "CANCELLED", "AUTHENTICATION_FAILURE", "NETWORK_FAILURE", "PROVIDER_FAILURE", "RATE_LIMITED"]
     },
     "review_id": {
       "type": "string"
@@ -174,6 +192,18 @@ fn review_schema() -> String {
         "input_tokens": { "type": "integer" },
         "output_tokens": { "type": "integer" },
         "estimated_cost_usd": { "type": ["number", "null"] }
+      }
+    },
+    "obligation_assessments": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["obligation_id", "disposition", "evidence"],
+        "properties": {
+          "obligation_id": {"type": "string", "minLength": 1},
+          "disposition": {"type": "string", "enum": ["verified", "unresolved", "not_applicable"]},
+          "evidence": {"type": "string", "minLength": 1}
+        }
       }
     },
     "skills": {
