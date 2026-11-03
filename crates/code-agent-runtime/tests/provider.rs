@@ -326,6 +326,8 @@ fn openai_provider_maps_http_failures_to_typed_model_errors() {
             false,
         ),
         (429_u16, r#"{"error":{"message":"slow down"}}"#, true),
+        (401_u16, r#"{"error":{"message":"private credential failure"}}"#, false),
+        (403_u16, r#"{"error":{"message":"private credential failure"}}"#, false),
     ];
     let request = CanonicalModelRequest {
         instructions: vec![],
@@ -369,6 +371,11 @@ fn openai_provider_maps_http_failures_to_typed_model_errors() {
         server.join().expect("provider server thread");
 
         match (rate_limited, error) {
+            (false, ModelError::Authentication(message)) => {
+                assert!(matches!(status, 401 | 403));
+                assert!(message.contains(&status.to_string()));
+                assert!(!message.contains("private credential"));
+            }
             (false, ModelError::ApiError(message)) => {
                 assert!(
                     message.contains("500"),

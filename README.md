@@ -205,3 +205,19 @@ If you are exploring the repository for the first time, a good reading order is:
 4. `crates/review-app/src/lib.rs`
 5. `crates/agent-kernel/src/coordinator.rs`
 6. `crates/code-agent-runtime/src/tools.rs`
+
+### Pi continuation and recovery protocol
+
+Indeterminate setup failures now include a nonempty run identity and completion
+timestamp. Authentication, network, provider and rate-limit failures have structured
+reason codes; resource exhaustion and cancellation retain their existing reasons and
+usage. Kernel model-failure events retain the category without credential/error-body
+text. The generated result schema lists all runtime reason variants.
+
+Review completions may return `obligation_assessments`, each containing a stable
+`obligation_id`, `disposition` (`verified`, `unresolved`, `not_applicable`) and concrete
+`evidence`. Pi supplies the original contract, accumulated obligations and approved
+amendments. Its native gate requires explicit verified assessments of open obligations;
+author claims or a general APPROVED verdict cannot silently close old findings.
+The result field is optional for existing callers with no persisted obligations.
+Deploy the matching Pi/Scaffold continuation implementation when using this protocol.

@@ -153,13 +153,25 @@ where
             let response = match generation {
                 Ok(r) => r,
                 Err(e) => {
+                    if session_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                        self.append_event(&session_id, turn, "", "kernel.session_budget_exhausted");
+                        return (
+                            self.app.build_terminal_result(&state, &usage),
+                            self.ledger.events().to_vec(),
+                        );
+                    }
                     tracing::warn!(turn, error = ?e, "model failed");
                     self.append_event_with_details(
                         &session_id,
                         turn,
                         "",
                         "kernel.model_failed",
-                        Some(format!("{:?}", e)),
+                        Some(serde_json::json!({"category": match &e {
+                            crate::model::ModelError::Authentication(_) => "authentication",
+                            crate::model::ModelError::Network(_) | crate::model::ModelError::Timeout(_) => "network",
+                            crate::model::ModelError::RateLimit(_) => "rate_limit",
+                            crate::model::ModelError::ApiError(_) => "provider",
+                        }}).to_string()),
                     );
                     self.append_event(&session_id, turn, "", "kernel.session_indeterminate");
                     return (
