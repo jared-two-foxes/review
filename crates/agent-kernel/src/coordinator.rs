@@ -153,6 +153,13 @@ where
             let response = match generation {
                 Ok(r) => r,
                 Err(e) => {
+                    if session_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                        self.append_event(&session_id, turn, "", "kernel.session_budget_exhausted");
+                        return (
+                            self.app.build_terminal_result(&state, &usage),
+                            self.ledger.events().to_vec(),
+                        );
+                    }
                     tracing::warn!(turn, error = ?e, "model failed");
                     self.append_event_with_details(
                         &session_id,

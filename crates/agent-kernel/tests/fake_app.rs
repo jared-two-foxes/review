@@ -899,3 +899,27 @@ fn cancellation_produces_exactly_one_terminal_state() {
         .any(|e| e.event_type == "kernel.completion_accepted"));
     assert!(!events.iter().any(|e| e.event_type == "kernel.model_failed"));
 }
+
+#[test]
+fn caller_deadline_exhaustion_is_resource_failure_not_provider_outage() {
+    struct DeadlineProvider;
+    impl ModelProvider for DeadlineProvider {
+        fn generate(&mut self, _: &CanonicalModelRequest) -> Result<CanonicalModelResponse, ModelError> {
+            panic!("caller deadline must be forwarded")
+        }
+        fn generate_with_deadline(&mut self, _: &CanonicalModelRequest, deadline: Instant)
+            -> Result<CanonicalModelResponse, ModelError> {
+            std::thread::sleep(deadline.saturating_duration_since(Instant::now()) + std::time::Duration::from_millis(2));
+            Err(ModelError::Timeout("caller allowance exhausted".into()))
+        }
+    }
+    let coordinator = build_coordinator_with_limits(DeadlineProvider, Limits {
+        max_turns: 10, max_tool_calls: 10, max_completion_attempts: 10,
+        wall_clock_budget: Some(std::time::Duration::from_millis(20)), ledger_path: None,
+        max_repeated_actions: 3, max_input_tokens: None, max_cost_usd: None,
+    });
+    let (result, events) = coordinator.run_full(EchoRequest, None);
+    assert_eq!(result.tool_calls, 0);
+    assert!(events.iter().any(|e| e.event_type == "kernel.session_budget_exhausted"));
+    assert!(!events.iter().any(|e| e.event_type == "kernel.model_failed"));
+}
