@@ -18,6 +18,12 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[test]
+fn default_review_config_allows_thirty_tool_calls() {
+    assert_eq!(ReviewConfig::default().max_tool_calls, 30);
+}
+
 // ── Scripted provider (same pattern as fake_app) ──
 struct ScriptedModelProvider {
     responses: Vec<CanonicalModelResponse>,

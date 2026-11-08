@@ -100,6 +100,7 @@ Common flags include:
 - `--model`
 - `--base-url`
 - `--max-turns`
+- `--max-tool-calls` (review CLI default: 120; override per run as needed)
 - `--wall-clock-budget-secs`
 
 Provider routing is model-driven:

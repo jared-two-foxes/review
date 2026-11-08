@@ -131,7 +131,7 @@ impl Default for ReviewConfig {
             model: "opencode/gpt-5.6-terra".to_string(),
             provider_root: None,
             max_turns: 10,
-            max_tool_calls: 10,
+            max_tool_calls: 30,
             max_completion_attempts: 3,
             wall_clock_budget: Some(Duration::from_secs(60)),
             ledger_path: None,

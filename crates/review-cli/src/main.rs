@@ -10,6 +10,12 @@ use std::sync::{
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
+const DEFAULT_MAX_TOOL_CALLS: u32 = 120;
+
+fn parse_max_tool_calls(value: &str) -> u32 {
+    value.parse::<u32>().unwrap_or(DEFAULT_MAX_TOOL_CALLS).max(1)
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -17,7 +23,7 @@ fn main() {
     let mut model: String = "opencode/gpt-5.6-terra".into();
     let mut provider_root: Option<String> = None;
     let mut max_turns: u32 = 10;
-    let mut max_tool_calls: u32 = 40;
+    let mut max_tool_calls = DEFAULT_MAX_TOOL_CALLS;
     let mut max_repeated_actions: u32 = 3;
     let mut max_completion_attempts: u32 = 3;
     let mut wall_clock_budget_secs: u64 = 60;
@@ -71,10 +77,7 @@ fn main() {
             }
 
             "--max-tool-calls" => {
-                max_tool_calls = flag_value(&args, i, "--max-tool-calls")
-                    .parse::<u32>()
-                    .unwrap_or(40)
-                    .max(1);
+                max_tool_calls = parse_max_tool_calls(&flag_value(&args, i, "--max-tool-calls"));
                 i += 1;
             }
             "--max-repeated-actions" => {
@@ -326,7 +329,7 @@ fn review_cli_command() -> Command {
                     Arg::new("max-tool-calls")
                         .long("max-tool-calls")
                         .value_name("COUNT")
-                        .help("Maximum number of tool calls before stopping"),
+                        .help("Maximum number of tool calls before stopping (default: 120)"),
                 )
                 .arg(
                     Arg::new("max-repeated-actions")
@@ -424,5 +427,30 @@ fn flag_value(args: &[String], index: usize, flag: &str) -> String {
                 &format!("{} requires a value", flag),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_MAX_TOOL_CALLS, parse_max_tool_calls};
+
+    #[test]
+    fn tool_call_limit_defaults_to_one_hundred_twenty() {
+        assert_eq!(DEFAULT_MAX_TOOL_CALLS, 120);
+    }
+
+    #[test]
+    fn tool_call_limit_preserves_valid_overrides() {
+        assert_eq!(parse_max_tool_calls("73"), 73);
+    }
+
+    #[test]
+    fn malformed_tool_call_limit_uses_the_default() {
+        assert_eq!(parse_max_tool_calls("not-a-number"), 120);
+    }
+
+    #[test]
+    fn zero_tool_call_limit_remains_clamped_to_one() {
+        assert_eq!(parse_max_tool_calls("0"), 1);
     }
 }
