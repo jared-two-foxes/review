@@ -25,6 +25,7 @@ fn valid_minimal_request_produces_indeterminate_result() {
             "json",
         ])
         .env("OPENAI_API_KEY", "")
+        .env("OPENCODE_API_KEY", "")
         .output()
         .expect("review CLI should be executable");
 
@@ -62,6 +63,7 @@ fn demo_args_produce_schema_valid_indeterminate_result() {
             "json",
         ])
         .env("OPENAI_API_KEY", "")
+        .env("OPENCODE_API_KEY", "")
         .output()
         .expect("review CLI should be executable");
 
@@ -108,6 +110,7 @@ fn run_help_lists_review_flags() {
     assert!(stdout.contains("--repository"));
     assert!(stdout.contains("--head-ref"));
     assert!(stdout.contains("--emit-events"));
+    assert!(stdout.contains("default: 120"));
 }
 
 #[test]
