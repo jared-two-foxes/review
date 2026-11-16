@@ -11,6 +11,8 @@ use agent_protocol::RandomIdGenerator;
 use serde_json::{json, Value};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 struct CountingTool(Rc<Cell<u32>>);
@@ -36,6 +38,7 @@ impl Tool for CountingTool {
 }
 
 struct Script {
+    cancel_on_generate: Option<Arc<AtomicBool>>,
     responses: Vec<CanonicalModelResponse>,
     seen_histories: Rc<RefCell<Vec<Vec<ConversationMessage>>>>,
 }
@@ -43,6 +46,9 @@ struct Script {
 impl ModelProvider for Script {
     fn generate(&mut self, request: &CanonicalModelRequest) -> Result<CanonicalModelResponse, ModelError> {
         self.seen_histories.borrow_mut().push(request.history.clone());
+        if let Some(flag) = &self.cancel_on_generate {
+            flag.store(true, Ordering::Relaxed);
+        }
         Ok(self.responses.remove(0))
     }
     fn generate_with_deadline(&mut self, request: &CanonicalModelRequest, _: Instant) -> Result<CanonicalModelResponse, ModelError> {
@@ -143,7 +149,7 @@ fn coordinator(
     catalog.register(Box::new(CountingTool(executed.clone())));
     SessionCoordinator::new(
         App,
-        Script { responses, seen_histories: seen.clone() },
+        Script { cancel_on_generate: None, responses, seen_histories: seen.clone() },
         RandomIdGenerator::new(),
         catalog,
         limits,
@@ -262,4 +268,90 @@ fn checkpoint_for_a_different_request_is_rejected() {
         .run_full((), None);
     assert!(matches!(Checkpoint::load(&cp, "fp-two"), Err(CheckpointError::FingerprintMismatch)));
     assert!(matches!(Checkpoint::load(&dir.path().join("missing"), "x"), Err(CheckpointError::Io(_))));
+}
+
+fn tool_message<'a>(history: &'a [ConversationMessage], id: &str) -> Option<&'a str> {
+    history.iter().find_map(|m| match m {
+        ConversationMessage::Tool { tool_call_id, content } if tool_call_id == id => Some(content.as_str()),
+        _ => None,
+    })
+}
+
+#[test]
+fn stalled_call_is_recorded_not_reported_as_unexecuted() {
+    let dir = tempfile::tempdir().unwrap();
+    let cp = dir.path().join("cp.json");
+    let executed = Rc::new(Cell::new(0));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let mut l = limits(10, None);
+    l.max_repeated_actions = 1;
+    let (r, events) = coordinator(vec![respond(vec![call("a1", 1), call("a2", 1)])], &executed, &seen, l)
+        .with_checkpoint(cp.clone(), "fp".into())
+        .run_full((), None);
+    assert_eq!(executed.get(), 2);
+    assert_eq!(r.tool_calls, 2, "the executed repeat is reduced into state");
+    let completed = events.iter().filter(|e| e.event_type == "kernel.tool_completed").count();
+    assert_eq!(completed, 2);
+    assert_eq!(events.last().unwrap().event_type, "kernel.session_stalled");
+
+    let saved = Checkpoint::load(&cp, "fp").unwrap();
+    let result = tool_message(&saved.history, "a2").expect("result recorded");
+    assert!(!result.contains("was not executed"), "{result}");
+    assert!(result.contains("completed with status"));
+}
+
+#[test]
+fn cancelled_call_is_not_counted() {
+    let dir = tempfile::tempdir().unwrap();
+    let cp = dir.path().join("cp.json");
+    let executed = Rc::new(Cell::new(0));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let flag = Arc::new(AtomicBool::new(false));
+    let mut catalog = ToolCatalog::new();
+    catalog.register(Box::new(CountingTool(executed.clone())));
+    let (_, events) = SessionCoordinator::new(
+        App,
+        Script {
+            cancel_on_generate: Some(flag.clone()),
+            responses: vec![respond(vec![call("a1", 1)])],
+            seen_histories: seen.clone(),
+        },
+        RandomIdGenerator::new(),
+        catalog,
+        limits(5, None),
+    )
+    .with_checkpoint(cp.clone(), "fp".into())
+    .run_full((), Some(flag.as_ref()));
+    assert_eq!(events.last().unwrap().event_type, "kernel.session_cancelled");
+    assert_eq!(executed.get(), 0);
+    let saved = Checkpoint::load(&cp, "fp").unwrap();
+    assert_eq!(saved.tool_call_count, 0, "cancelled call must not consume budget");
+}
+
+#[test]
+fn restored_usage_over_budget_stops_before_another_generation() {
+    let dir = tempfile::tempdir().unwrap();
+    let cp = dir.path().join("cp.json");
+    let executed = Rc::new(Cell::new(0));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let mut l = limits(10, None);
+    l.max_input_tokens = Some(50);
+    let mut expensive = respond(vec![call("a1", 1)]);
+    expensive.usage = Some(UsageRecord { input_tokens: 100, output_tokens: 1, estimated_cost_usd: None });
+    let (_, events) = coordinator(vec![expensive], &executed, &seen, l)
+        .with_checkpoint(cp.clone(), "fp".into())
+        .run_full((), None);
+    assert_eq!(events.last().unwrap().event_type, "kernel.session_budget_exhausted");
+    let saved = Checkpoint::load(&cp, "fp").unwrap();
+
+    seen.borrow_mut().clear();
+    let mut l = limits(10, None);
+    l.max_input_tokens = Some(50);
+    // No scripted responses: any provider call would panic.
+    let (_, events) = coordinator(vec![], &executed, &seen, l)
+        .with_checkpoint(cp.clone(), "fp".into())
+        .resume_from(saved)
+        .run_full((), None);
+    assert_eq!(events.last().unwrap().event_type, "kernel.session_budget_exhausted");
+    assert!(seen.borrow().is_empty(), "no model request may be made");
 }

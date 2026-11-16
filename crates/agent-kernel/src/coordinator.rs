@@ -195,6 +195,21 @@ where
                 break 'run "kernel.session_limit_exceeded";
             }
 
+            // A resumed session may already be over a token/cost budget (for
+            // example resumed with an unchanged or lower limit); stop before
+            // paying for another generation.
+            if let Some(reason) = budget_exhaustion(&self.limits, &usage) {
+                self.append_event_with_details(
+                    &session_id,
+                    turn,
+                    "",
+                    "kernel.session_budget_exhausted",
+                    Some(reason.join("; ")),
+                );
+                turn -= 1;
+                break 'run "kernel.session_budget_exhausted";
+            }
+
             // Build model request from app state + available tools.
             let instructions = self.app.build_system_instructions(&state);
             let context = self.app.build_context(&state);
@@ -257,21 +272,7 @@ where
                     };
             }
 
-            let mut exhausted_budgets = Vec::new();
-            if self
-                .limits
-                .max_input_tokens
-                .is_some_and(|limit| usage.input_tokens > limit)
-            {
-                exhausted_budgets.push("input_tokens exceeded max_input_tokens");
-            }
-            if let (Some(limit), Some(cost)) = (self.limits.max_cost_usd, usage.estimated_cost_usd)
-            {
-                if cost > limit {
-                    exhausted_budgets.push("estimated_cost_usd exceeded max_cost_usd");
-                }
-            }
-            if !exhausted_budgets.is_empty() {
+            if let Some(exhausted_budgets) = budget_exhaustion(&self.limits, &usage) {
                 self.append_event_with_details(
                     &session_id,
                     turn,
@@ -360,6 +361,8 @@ where
                                     "kernel.session_cancelled",
                                     Some("cancelled by external request".into()),
                                 );
+                                // The call was counted above but never ran.
+                                tool_call_count -= 1;
                                 break 'run "kernel.session_cancelled";
                             }
                         }
@@ -405,6 +408,9 @@ where
                         }
 
                         let result = tool_impl.execute(&arguments);
+                        // Set when this call completes a stall; the stall is
+                        // reported only after the executed call is recorded.
+                        let mut stalled_after: Option<u32> = None;
                         let call_key = (
                             tool.clone(),
                             serde_json::to_string(&arguments).unwrap_or_default(),
@@ -432,24 +438,7 @@ where
                             let count = repeat_counts.entry(call_key.clone()).or_insert(0);
                             *count += 1;
                             if *count >= self.limits.max_repeated_actions {
-                                tracing::warn!(
-                                    turn,
-                                    tool = %tool,
-                                    repeated = *count,
-                                    "session stalled: repeated identical tool calls"
-                                );
-                                let stall_event = self.append_event_with_details(
-                                    &session_id,
-                                    turn,
-                                    &action_id,
-                                    "kernel.session_stalled",
-                                    Some(format!(
-                                        "repeated identical call to \"{}\" {} times",
-                                        tool, *count,
-                                    )),
-                                );
-                                state = self.app.reduce_event(&state, &stall_event);
-                                break 'run "kernel.session_stalled";
+                                stalled_after = Some(*count);
                             }
                         }
 
@@ -475,6 +464,27 @@ where
                         );
 
                         state = self.app.reduce_event(&state, &event);
+
+                        if let Some(count) = stalled_after {
+                            tracing::warn!(
+                                turn,
+                                tool = %tool,
+                                repeated = count,
+                                "session stalled: repeated identical tool calls"
+                            );
+                            let stall_event = self.append_event_with_details(
+                                &session_id,
+                                turn,
+                                &action_id,
+                                "kernel.session_stalled",
+                                Some(format!(
+                                    "repeated identical call to \"{}\" {} times",
+                                    tool, count,
+                                )),
+                            );
+                            state = self.app.reduce_event(&state, &stall_event);
+                            break 'run "kernel.session_stalled";
+                        }
                     }
                     ModelAction::CompletionRequest { action_id, payload } => {
                         completion_attempt_count += 1;
@@ -705,6 +715,22 @@ where
     pub fn ledger(&self) -> &InMemoryLedger {
         &self.ledger
     }
+}
+
+fn budget_exhaustion(limits: &Limits, usage: &UsageRecord) -> Option<Vec<&'static str>> {
+    let mut exhausted = Vec::new();
+    if limits
+        .max_input_tokens
+        .is_some_and(|limit| usage.input_tokens > limit)
+    {
+        exhausted.push("input_tokens exceeded max_input_tokens");
+    }
+    if let (Some(limit), Some(cost)) = (limits.max_cost_usd, usage.estimated_cost_usd) {
+        if cost > limit {
+            exhausted.push("estimated_cost_usd exceeded max_cost_usd");
+        }
+    }
+    (!exhausted.is_empty()).then_some(exhausted)
 }
 
 /// Build a JSON summary of a tall call fo rthe event details field.
