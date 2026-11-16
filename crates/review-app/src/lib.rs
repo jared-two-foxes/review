@@ -91,6 +91,13 @@ pub struct ReviewConfig {
     /// still saving to `checkpoint_path`.  Lets a new run directory pick up a
     /// previous run's work.  Implies resume.
     pub resume_from: Option<std::path::PathBuf>,
+    /// Caller-chosen identity of the review criteria, used in place of the
+    /// requirements *content* when binding a checkpoint to its request.  For a
+    /// caller whose requirements file mixes stable criteria with per-attempt
+    /// material (for example freshly gathered check evidence), this lets the
+    /// checkpoint stay bound to the criteria alone.  Every run that writes or
+    /// resumes the checkpoint must supply the same identity.
+    pub resume_identity: Option<String>,
 }
 
 /// Priority level for context blocks during budgeting.
@@ -152,6 +159,7 @@ impl Default for ReviewConfig {
             checkpoint_path: None,
             resume: false,
             resume_from: None,
+            resume_identity: None,
         }
     }
 }
@@ -181,7 +189,11 @@ fn load_requirements(request: &ReviewRequest) -> Result<Option<String>, String> 
 /// directory write the same requirements to a different file each time, and
 /// only the content matters.  `:working` has no immutable identity; the review
 /// state's content-id tracking covers that case.
-fn request_fingerprint(request: &ReviewRequest, requirements: &Option<String>) -> Result<String, String> {
+fn request_fingerprint(
+    request: &ReviewRequest,
+    requirements: &Option<String>,
+    identity: Option<&str>,
+) -> Result<String, String> {
     let repo = open_repo(Path::new(&request.repository_path))?;
     let base = ReviewTarget::parse(&repo, &request.base_ref)
         .map_err(|e| format!("resolve base_ref: {e}"))?
@@ -195,13 +207,19 @@ fn request_fingerprint(request: &ReviewRequest, requirements: &Option<String>) -
     if request_json.get("requirements").is_some() {
         request_json["requirements"] = Value::Null;
     }
-    let identity = json!({
+    let mut bound = json!({
         "request": request_json,
         "base": base,
         "head": head,
         "requirements": requirements,
     });
-    Ok(agent_kernel::checkpoint::fingerprint(identity.to_string().as_bytes()))
+    // A caller-supplied identity stands in for the requirements content.  The
+    // key is added only when given, so fingerprints without one are unchanged.
+    if let Some(identity) = identity {
+        bound["requirements"] = Value::Null;
+        bound["requirements_identity"] = json!(identity);
+    }
+    Ok(agent_kernel::checkpoint::fingerprint(bound.to_string().as_bytes()))
 }
 
 /// Resolve a path that may not exist yet: canonicalize the parent directory
@@ -319,7 +337,11 @@ pub fn preflight_resume(request: &ReviewRequest, config: &ReviewConfig) -> Resul
     let Some(path) = resume_source(config)? else {
         return Ok(());
     };
-    let fingerprint = request_fingerprint(request, &load_requirements(request)?)?;
+    let fingerprint = request_fingerprint(
+        request,
+        &load_requirements(request)?,
+        config.resume_identity.as_deref(),
+    )?;
     agent_kernel::checkpoint::Checkpoint::load(path, &fingerprint)
         .map(|_| ())
         .map_err(|e| e.to_string())
@@ -421,7 +443,7 @@ pub fn run_review_with_provider<P: ModelProvider>(
     validate_artifact_paths(request, config)?;
     let requirements_for_fingerprint = requirements.clone();
     let fingerprint = if config.checkpoint_path.is_some() {
-        Some(request_fingerprint(request, &requirements)?)
+        Some(request_fingerprint(request, &requirements, config.resume_identity.as_deref())?)
     } else {
         None
     };
@@ -448,7 +470,11 @@ pub fn run_review_with_provider<P: ModelProvider>(
     if let Some(source) = resume_source(config)? {
         let fingerprint = match &fingerprint {
             Some(f) => f.clone(),
-            None => request_fingerprint(request, &requirements_for_fingerprint)?,
+            None => request_fingerprint(
+                request,
+                &requirements_for_fingerprint,
+                config.resume_identity.as_deref(),
+            )?,
         };
         let checkpoint = agent_kernel::checkpoint::Checkpoint::load(source, &fingerprint)
             .map_err(|e| e.to_string())?;
@@ -1322,10 +1348,10 @@ mod tests {
         let repo = init_repo("fp");
         let mut request = request_for("HEAD", repo.to_str().unwrap());
         request.requirements = Some("/some/attempt-1/requirements.md".into());
-        let a = request_fingerprint(&request, &Some("criteria".into())).unwrap();
+        let a = request_fingerprint(&request, &Some("criteria".into()), None).unwrap();
         request.requirements = Some("/some/attempt-2/requirements.md".into());
-        let b = request_fingerprint(&request, &Some("criteria".into())).unwrap();
-        let c = request_fingerprint(&request, &Some("different criteria".into())).unwrap();
+        let b = request_fingerprint(&request, &Some("criteria".into()), None).unwrap();
+        let c = request_fingerprint(&request, &Some("different criteria".into()), None).unwrap();
         assert_eq!(a, b);
         assert_ne!(a, c);
         std::fs::remove_dir_all(&repo).ok();
@@ -1371,10 +1397,31 @@ mod tests {
     }
 
     #[test]
+    fn a_resume_identity_replaces_requirements_content_in_the_fingerprint() {
+        let repo = init_repo("fp-identity");
+        let request = request_for("HEAD", repo.to_str().unwrap());
+        let with = |text: &str, identity: Option<&str>| {
+            request_fingerprint(&request, &Some(text.into()), identity).unwrap()
+        };
+        // Per-attempt material in the requirements no longer matters ...
+        assert_eq!(
+            with("criteria\nevidence of attempt 1", Some("criteria-v1")),
+            with("criteria\nevidence of attempt 2", Some("criteria-v1"))
+        );
+        // ... but a different identity (changed criteria) does.
+        assert_ne!(with("x", Some("criteria-v1")), with("x", Some("criteria-v2")));
+        // Without an identity the content is still bound, as before.
+        assert_ne!(with("criteria one", None), with("criteria two", None));
+        // And an identity is distinguishable from the same text used as content.
+        assert_ne!(with("same", Some("same")), with("same", None));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
     fn fingerprint_is_unchanged_for_requests_without_requirements() {
         let repo = init_repo("fp-legacy");
         let request = request_for("HEAD", repo.to_str().unwrap()); // requirements: None
-        let current = request_fingerprint(&request, &None).unwrap();
+        let current = request_fingerprint(&request, &None, None).unwrap();
         // The formula before the requirements path was excluded.
         let handle = open_repo(&repo).unwrap();
         let label = |r: &str| ReviewTarget::parse(&handle, r).unwrap().label(&handle);

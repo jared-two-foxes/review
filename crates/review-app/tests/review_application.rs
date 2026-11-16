@@ -642,6 +642,7 @@ fn requirements_orientation_is_framed_as_data_for_analysis() {
             checkpoint_path: None,
             resume: false,
             resume_from: None,
+            resume_identity: None,
         },
         provider,
         None,
