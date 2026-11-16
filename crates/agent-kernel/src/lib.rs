@@ -1,4 +1,5 @@
 pub mod application;
+pub mod checkpoint;
 pub mod coordinator;
 pub mod ledger;
 pub mod limits;

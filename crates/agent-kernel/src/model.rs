@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Instant;
 
@@ -13,7 +14,7 @@ pub enum ModelError {
 }
 
 /// Provider-independent accounting for tokens consumed by a model request.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UsageRecord {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -28,7 +29,7 @@ pub struct ToolDescription {
 }
 
 /// A record of a singlet tool call made by the assistant, for conversation history
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolCallRecord {
     pub id: String,
     pub name: String,
@@ -39,7 +40,7 @@ pub struct ToolCallRecord {
 /// The coordinator accumulates these across turns; the provider serializes
 /// them into the appropriate format (assistant tool_calls, tool results,
 /// user feedback, etc.) for the model provider.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ConversationMessage {
     /// Assistant message - tool calls and/or text content (e.g. a completion
     /// attempt)

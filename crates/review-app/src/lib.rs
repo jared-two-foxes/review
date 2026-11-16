@@ -80,6 +80,13 @@ pub struct ReviewConfig {
     pub max_repeated_actions: u32,
     pub max_input_tokens: Option<u64>,
     pub max_cost_usd: Option<f64>,
+    /// Save a resumable checkpoint here after every turn and on early stop.
+    /// A completed review removes it.
+    pub checkpoint_path: Option<std::path::PathBuf>,
+    /// Continue from `checkpoint_path` instead of starting over.  Limits are
+    /// cumulative: raise `max_tool_calls` / `max_turns` above what the earlier
+    /// attempt used to grant additional room.  The wall-clock budget restarts.
+    pub resume: bool,
 }
 
 /// Priority level for context blocks during budgeting.
@@ -138,8 +145,126 @@ impl Default for ReviewConfig {
             max_repeated_actions: 3,
             max_input_tokens: None,
             max_cost_usd: None,
+            checkpoint_path: None,
+            resume: false,
         }
     }
+}
+
+/// Requirements text: the contents of the file when the value names one,
+/// otherwise the literal value.
+fn load_requirements(request: &ReviewRequest) -> Result<Option<String>, String> {
+    request
+        .requirements
+        .as_deref()
+        .map(|requirements| {
+            let path = Path::new(requirements);
+            if path.is_file() {
+                std::fs::read_to_string(path).map_err(|e| format!("read requirements file: {e:?}"))
+            } else {
+                Ok(requirements.to_string())
+            }
+        })
+        .transpose()
+}
+
+/// Identity of what is being reviewed.  A request string such as `HEAD` or a
+/// branch name can move between attempts, and a requirements file can be
+/// edited, so the fingerprint covers the resolved commit ids (or index tree)
+/// and the requirements content, not just the request text.  `:working` has no
+/// immutable identity; the review state's content-id tracking covers that case.
+fn request_fingerprint(request: &ReviewRequest, requirements: &Option<String>) -> Result<String, String> {
+    let repo = open_repo(Path::new(&request.repository_path))?;
+    let base = ReviewTarget::parse(&repo, &request.base_ref)
+        .map_err(|e| format!("resolve base_ref: {e}"))?
+        .label(&repo);
+    let head = ReviewTarget::parse(&repo, &request.head_ref)
+        .map_err(|e| format!("resolve head_ref: {e}"))?
+        .label(&repo);
+    let identity = json!({
+        "request": request,
+        "base": base,
+        "head": head,
+        "requirements": requirements,
+    });
+    Ok(agent_kernel::checkpoint::fingerprint(identity.to_string().as_bytes()))
+}
+
+/// Resolve a path that may not exist yet: canonicalize the parent directory
+/// and re-attach the file name, so equivalent spellings and symlinked
+/// directories compare equal.
+fn resolve_artifact_path(path: &Path) -> std::path::PathBuf {
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    match (absolute.parent(), absolute.file_name()) {
+        (Some(parent), Some(name)) => parent
+            .canonicalize()
+            .map(|p| p.join(name))
+            .unwrap_or_else(|_| absolute.clone()),
+        _ => absolute,
+    }
+}
+
+fn same_file(a: &Path, b: &Path) -> bool {
+    if resolve_artifact_path(a) == resolve_artifact_path(b) {
+        return true;
+    }
+    // Hard links / symlinked files that already exist.
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// The checkpoint must not share a file with the ledger (the ledger is
+/// truncated when a session starts) and, for a working-tree review, must not
+/// live inside the repository where it would show up as an untracked change
+/// and be inspected by the model.
+fn validate_artifact_paths(request: &ReviewRequest, config: &ReviewConfig) -> Result<(), String> {
+    let Some(checkpoint) = &config.checkpoint_path else {
+        return Ok(());
+    };
+    if let Some(ledger) = &config.ledger_path {
+        if same_file(checkpoint, ledger) {
+            return Err("--checkpoint and --ledger must be different files".into());
+        }
+    }
+    let mut tmp = checkpoint.as_os_str().to_owned();
+    tmp.push(".tmp");
+    if let Some(ledger) = &config.ledger_path {
+        if same_file(Path::new(&tmp), ledger) {
+            return Err("--ledger must not be the checkpoint's temporary file".into());
+        }
+    }
+    if request.head_ref == ":working" {
+        let repo_root = Path::new(&request.repository_path)
+            .canonicalize()
+            .unwrap_or_else(|_| Path::new(&request.repository_path).to_path_buf());
+        if resolve_artifact_path(checkpoint).starts_with(&repo_root) {
+            return Err(
+                "--checkpoint must be outside the repository when reviewing the working tree \
+                 (it would appear as an untracked change)"
+                    .into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Verify that `config.resume` can be honoured before any work starts, so a
+/// caller can fail fast with a clear message.
+pub fn preflight_resume(request: &ReviewRequest, config: &ReviewConfig) -> Result<(), String> {
+    validate_artifact_paths(request, config)?;
+    if !config.resume {
+        return Ok(());
+    }
+    let path = config
+        .checkpoint_path
+        .as_ref()
+        .ok_or("resume requires a checkpoint path")?;
+    let fingerprint = request_fingerprint(request, &load_requirements(request)?)?;
+    agent_kernel::checkpoint::Checkpoint::load(path, &fingerprint)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 pub fn run_review(
@@ -225,18 +350,7 @@ pub fn run_review_with_provider<P: ModelProvider>(
         SecurityPolicy::new(),
     ));
 
-    let requirements = request
-        .requirements
-        .as_deref()
-        .map(|requirements| {
-            let path = Path::new(requirements);
-            if path.is_file() {
-                std::fs::read_to_string(path).map_err(|e| format!("read requirements file: {e:?}"))
-            } else {
-                Ok(requirements.to_string())
-            }
-        })
-        .transpose()?;
+    let requirements = load_requirements(request)?;
 
     catalog.register(GetProjectGuidanceTool::new(
         open_repo(path)?,
@@ -245,6 +359,13 @@ pub fn run_review_with_provider<P: ModelProvider>(
         byte_limit,
     ));
 
+    // Validate before the coordinator opens (and truncates) the ledger file.
+    validate_artifact_paths(request, config)?;
+    let fingerprint = if config.checkpoint_path.is_some() {
+        Some(request_fingerprint(request, &requirements)?)
+    } else {
+        None
+    };
     let app = ReviewApplication::new_with_sources(SystemClock::new(), RandomIdGenerator::new())
         .with_requirements(requirements)
         .with_project_guidance(project_guidance);
@@ -258,13 +379,23 @@ pub fn run_review_with_provider<P: ModelProvider>(
         max_input_tokens: config.max_input_tokens,
         max_cost_usd: config.max_cost_usd,
     };
-    let coordinator = SessionCoordinator::new(
+    let mut coordinator = SessionCoordinator::new(
         app,
         provider,
         RandomIdGenerator::new(),
         catalog.into_inner(),
         limits,
     );
+    if let (Some(path), Some(fingerprint)) = (&config.checkpoint_path, fingerprint) {
+        if config.resume {
+            let checkpoint = agent_kernel::checkpoint::Checkpoint::load(path, &fingerprint)
+                .map_err(|e| e.to_string())?;
+            coordinator = coordinator.resume_from(checkpoint);
+        }
+        coordinator = coordinator.with_checkpoint(path.clone(), fingerprint);
+    } else if config.resume {
+        return Err("resume requires a checkpoint path".into());
+    }
     Ok(coordinator.run_full(request.clone(), cancel))
 }
 
@@ -1079,6 +1210,45 @@ mod tests {
     fn scope_event(app: &ReviewApplication, state: &ReviewState, details: Value) -> ReviewState {
         app.reduce_event(state, &LedgerEvent { event_type: "kernel.tool_completed".into(),
             details: Some(details.to_string()), ..Default::default() })
+    }
+
+    fn request_for(head: &str, repo: &str) -> ReviewRequest {
+        ReviewRequest {
+            schema: "review.request/v1".into(),
+            repository_path: repo.into(),
+            base_ref: "HEAD".into(),
+            head_ref: head.into(),
+            requirements: None,
+        }
+    }
+
+    #[test]
+    fn checkpoint_and_ledger_must_not_alias() {
+        let dir = std::env::temp_dir().join(format!("alias-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cp = dir.join("a.json");
+        let request = request_for("HEAD", "/nonexistent-repo");
+        let mut config = ReviewConfig { checkpoint_path: Some(cp.clone()), ..Default::default() };
+        config.ledger_path = Some(dir.join(".").join("a.json")); // equivalent spelling
+        assert!(validate_artifact_paths(&request, &config).is_err());
+        config.ledger_path = Some(dir.join("a.json.tmp"));
+        assert!(validate_artifact_paths(&request, &config).is_err());
+        config.ledger_path = Some(dir.join("ledger.jsonl"));
+        assert!(validate_artifact_paths(&request, &config).is_ok());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn working_tree_review_rejects_checkpoint_inside_repository() {
+        let repo = std::env::temp_dir().join(format!("repo-{}", std::process::id()));
+        std::fs::create_dir_all(&repo).unwrap();
+        let config = ReviewConfig { checkpoint_path: Some(repo.join("review.cp")), ..Default::default() };
+        let working = request_for(":working", repo.to_str().unwrap());
+        assert!(validate_artifact_paths(&working, &config).is_err());
+        // Committed heads are immutable, so an in-repo checkpoint is harmless.
+        let committed = request_for("HEAD", repo.to_str().unwrap());
+        assert!(validate_artifact_paths(&committed, &config).is_ok());
+        std::fs::remove_dir_all(&repo).ok();
     }
 
     #[test]

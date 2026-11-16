@@ -64,6 +64,15 @@ impl InMemoryLedger {
         event
     }
 
+    /// Re-append events recovered from a checkpoint.  Sequence numbers and
+    /// the hash chain are recomputed, so a faithfully restored prefix yields
+    /// identical hashes and the ledger file is rewritten to match.
+    pub fn restore(&mut self, events: Vec<LedgerEvent>) {
+        for event in events {
+            self.append(event);
+        }
+    }
+
     pub fn events(&self) -> &[LedgerEvent] {
         &self.events
     }

@@ -5,6 +5,10 @@ use std::time::Instant;
 use tracing;
 
 use crate::application::{AgentApplication, CompletionDecision};
+use crate::checkpoint::{
+    repair_dangling_tool_calls, CallKey, Checkpoint, LatestCall, Progress, RepeatCount,
+    CHECKPOINT_VERSION, TERMINAL_EVENT_TYPES,
+};
 use crate::ledger::{InMemoryLedger, LedgerEvent};
 use crate::limits::Limits;
 use crate::model::{
@@ -22,6 +26,13 @@ pub struct SessionCoordinator<A, P, I> {
     catalog: ToolCatalog,
     ledger: InMemoryLedger,
     limits: Limits,
+    checkpoint_sink: Option<CheckpointSink>,
+    resume: Option<Checkpoint>,
+}
+
+struct CheckpointSink {
+    path: std::path::PathBuf,
+    fingerprint: String,
 }
 
 impl<A, P, I> SessionCoordinator<A, P, I>
@@ -38,7 +49,26 @@ where
             catalog,
             ledger: InMemoryLedger::with_path(limits.ledger_path.as_ref()),
             limits,
+            checkpoint_sink: None,
+            resume: None,
         }
+    }
+
+    /// Persist a checkpoint to `path` after every turn and whenever the
+    /// session stops early.  `fingerprint` identifies the request so a
+    /// checkpoint can never be resumed against a different one.  A completed
+    /// session removes its checkpoint.
+    pub fn with_checkpoint(mut self, path: std::path::PathBuf, fingerprint: String) -> Self {
+        self.checkpoint_sink = Some(CheckpointSink { path, fingerprint });
+        self
+    }
+
+    /// Continue a previous session instead of starting over.  Limits are
+    /// compared against the cumulative counters in the checkpoint, so the
+    /// caller grants more room by raising them.
+    pub fn resume_from(mut self, checkpoint: Checkpoint) -> Self {
+        self.resume = Some(checkpoint);
+        self
     }
 
     pub fn run(self, request: A::Request) -> A::Result {
@@ -70,16 +100,11 @@ where
         let mut latest_tool_call_ids: HashMap<(String, String), String> = HashMap::new();
         let mut repeat_counts: HashMap<(String, String), u32> = HashMap::new();
 
-        // -- Budget counter --
+        // -- Budget counters (cumulative across resumed attempts) --
         let mut turn = 0u32;
         let mut tool_call_count = 0u32;
         let mut completion_attempt_count = 0u32;
-        let session_id = self.id_gen.next_id();
-        let session_deadline = self
-            .limits
-            .wall_clock_budget
-            .map(|budget| Instant::now() + budget);
-
+        let mut session_id = self.id_gen.next_id();
         let mut history: Vec<ConversationMessage> = Vec::new();
         let mut usage = UsageRecord {
             input_tokens: 0,
@@ -87,8 +112,57 @@ where
             estimated_cost_usd: None,
         };
 
-        // Main Loop
-        loop {
+        if let Some(cp) = self.resume.take() {
+            // Rebuild application state from the ledger, skipping the events
+            // that ended the earlier attempt so its terminal reason does not
+            // carry over.  The full event trail is still restored.
+            for event in cp
+                .events
+                .iter()
+                .filter(|e| !TERMINAL_EVENT_TYPES.contains(&e.event_type.as_str()))
+            {
+                state = self.app.reduce_event(&state, event);
+            }
+            self.ledger.restore(cp.events);
+            session_id = cp.session_id;
+            turn = cp.turn;
+            tool_call_count = cp.tool_call_count;
+            completion_attempt_count = cp.completion_attempt_count;
+            usage = cp.usage;
+            history = cp.history;
+            repair_dangling_tool_calls(&mut history);
+            for c in cp.latest_tool_calls {
+                latest_tool_call_ids.insert((c.key.tool, c.key.arguments), c.action_id);
+            }
+            for r in cp.repeat_counts {
+                repeat_counts.insert((r.key.tool, r.key.arguments), r.count);
+            }
+            tracing::info!(turn, tool_call_count, "resuming session from checkpoint");
+            self.append_event_with_details(
+                &session_id,
+                turn,
+                "",
+                "kernel.session_resumed",
+                Some(format!(
+                    "turn={} tool_calls={} completion_attempts={} (limits: turns={} tool_calls={})",
+                    turn,
+                    tool_call_count,
+                    completion_attempt_count,
+                    self.limits.max_turns,
+                    self.limits.max_tool_calls
+                )),
+            );
+        }
+
+        // The wall-clock budget is per attempt, not cumulative.
+        let session_deadline = self
+            .limits
+            .wall_clock_budget
+            .map(|budget| Instant::now() + budget);
+
+        // Main Loop.  Every exit is a `break 'run` carrying the event type that
+        // ended the session, so checkpointing happens in exactly one place.
+        let stop: &'static str = 'run: loop {
             turn += 1;
 
             // Check for cancellation before starting a new turn
@@ -102,10 +176,8 @@ where
                         "kernel.session_cancelled",
                         Some("cancelled by external request".into()),
                     );
-                    return (
-                        self.app.build_terminal_result(&state, &usage),
-                        self.ledger.events().to_vec(),
-                    );
+                    turn -= 1;
+                    break 'run "kernel.session_cancelled";
                 }
             }
 
@@ -118,10 +190,24 @@ where
                     Some(format!("exceeded max turns ({})", self.limits.max_turns)),
                 );
                 state = self.app.reduce_event(&state, &event);
-                return (
-                    self.app.build_terminal_result(&state, &usage),
-                    self.ledger.events().to_vec(),
+                // No work was done for this turn; do not charge it.
+                turn -= 1;
+                break 'run "kernel.session_limit_exceeded";
+            }
+
+            // A resumed session may already be over a token/cost budget (for
+            // example resumed with an unchanged or lower limit); stop before
+            // paying for another generation.
+            if let Some(reason) = budget_exhaustion(&self.limits, &usage) {
+                self.append_event_with_details(
+                    &session_id,
+                    turn,
+                    "",
+                    "kernel.session_budget_exhausted",
+                    Some(reason.join("; ")),
                 );
+                turn -= 1;
+                break 'run "kernel.session_budget_exhausted";
             }
 
             // Build model request from app state + available tools.
@@ -155,10 +241,7 @@ where
                 Err(e) => {
                     if session_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                         self.append_event(&session_id, turn, "", "kernel.session_budget_exhausted");
-                        return (
-                            self.app.build_terminal_result(&state, &usage),
-                            self.ledger.events().to_vec(),
-                        );
+                        break 'run "kernel.session_budget_exhausted";
                     }
                     tracing::warn!(turn, error = ?e, "model failed");
                     self.append_event_with_details(
@@ -174,10 +257,7 @@ where
                         }}).to_string()),
                     );
                     self.append_event(&session_id, turn, "", "kernel.session_indeterminate");
-                    return (
-                        self.app.build_terminal_result(&state, &usage),
-                        self.ledger.events().to_vec(),
-                    );
+                    break 'run "kernel.session_indeterminate";
                 }
             };
 
@@ -192,21 +272,7 @@ where
                     };
             }
 
-            let mut exhausted_budgets = Vec::new();
-            if self
-                .limits
-                .max_input_tokens
-                .is_some_and(|limit| usage.input_tokens > limit)
-            {
-                exhausted_budgets.push("input_tokens exceeded max_input_tokens");
-            }
-            if let (Some(limit), Some(cost)) = (self.limits.max_cost_usd, usage.estimated_cost_usd)
-            {
-                if cost > limit {
-                    exhausted_budgets.push("estimated_cost_usd exceeded max_cost_usd");
-                }
-            }
-            if !exhausted_budgets.is_empty() {
+            if let Some(exhausted_budgets) = budget_exhaustion(&self.limits, &usage) {
                 self.append_event_with_details(
                     &session_id,
                     turn,
@@ -214,10 +280,7 @@ where
                     "kernel.session_budget_exhausted",
                     Some(exhausted_budgets.join("; ")),
                 );
-                return (
-                    self.app.build_terminal_result(&state, &usage),
-                    self.ledger.events().to_vec(),
-                );
+                break 'run "kernel.session_budget_exhausted";
             }
 
             tracing::info!(turn, "model completed");
@@ -282,10 +345,9 @@ where
                                 )),
                             );
                             state = self.app.reduce_event(&state, &event);
-                            return (
-                                self.app.build_terminal_result(&state, &usage),
-                                self.ledger.events().to_vec(),
-                            );
+                            // The over-limit call never ran; do not count it.
+                            tool_call_count -= 1;
+                            break 'run "kernel.session_limit_exceeded";
                         }
 
                         // Check for cancellation before executing a tool
@@ -299,10 +361,9 @@ where
                                     "kernel.session_cancelled",
                                     Some("cancelled by external request".into()),
                                 );
-                                return (
-                                    self.app.build_terminal_result(&state, &usage),
-                                    self.ledger.events().to_vec(),
-                                );
+                                // The call was counted above but never ran.
+                                tool_call_count -= 1;
+                                break 'run "kernel.session_cancelled";
                             }
                         }
                         let tool_impl = match self.catalog.get(&tool) {
@@ -347,6 +408,9 @@ where
                         }
 
                         let result = tool_impl.execute(&arguments);
+                        // Set when this call completes a stall; the stall is
+                        // reported only after the executed call is recorded.
+                        let mut stalled_after: Option<u32> = None;
                         let call_key = (
                             tool.clone(),
                             serde_json::to_string(&arguments).unwrap_or_default(),
@@ -374,27 +438,7 @@ where
                             let count = repeat_counts.entry(call_key.clone()).or_insert(0);
                             *count += 1;
                             if *count >= self.limits.max_repeated_actions {
-                                tracing::warn!(
-                                    turn,
-                                    tool = %tool,
-                                    repeated = *count,
-                                    "session stalled: repeated identical tool calls"
-                                );
-                                let stall_event = self.append_event_with_details(
-                                    &session_id,
-                                    turn,
-                                    &action_id,
-                                    "kernel.session_stalled",
-                                    Some(format!(
-                                        "repeated identical call to \"{}\" {} times",
-                                        tool, *count,
-                                    )),
-                                );
-                                state = self.app.reduce_event(&state, &stall_event);
-                                return (
-                                    self.app.build_terminal_result(&state, &usage),
-                                    self.ledger.events().to_vec(),
-                                );
+                                stalled_after = Some(*count);
                             }
                         }
 
@@ -420,6 +464,27 @@ where
                         );
 
                         state = self.app.reduce_event(&state, &event);
+
+                        if let Some(count) = stalled_after {
+                            tracing::warn!(
+                                turn,
+                                tool = %tool,
+                                repeated = count,
+                                "session stalled: repeated identical tool calls"
+                            );
+                            let stall_event = self.append_event_with_details(
+                                &session_id,
+                                turn,
+                                &action_id,
+                                "kernel.session_stalled",
+                                Some(format!(
+                                    "repeated identical call to \"{}\" {} times",
+                                    tool, count,
+                                )),
+                            );
+                            state = self.app.reduce_event(&state, &stall_event);
+                            break 'run "kernel.session_stalled";
+                        }
                     }
                     ModelAction::CompletionRequest { action_id, payload } => {
                         completion_attempt_count += 1;
@@ -435,10 +500,8 @@ where
                                 )),
                             );
                             state = self.app.reduce_event(&state, &event);
-                            return (
-                                self.app.build_terminal_result(&state, &usage),
-                                self.ledger.events().to_vec(),
-                            );
+                            completion_attempt_count -= 1;
+                            break 'run "kernel.session_limit_exceeded";
                         }
 
                         let completion = match self.app.parse_completion(&payload) {
@@ -468,10 +531,7 @@ where
                                     &action_id,
                                     "kernel.completion_accepted",
                                 );
-                                return (
-                                    self.app.build_terminal_result(&state, &usage),
-                                    self.ledger.events().to_vec(),
-                                );
+                                break 'run "kernel.completion_accepted";
                             }
                             CompletionDecision::RejectedRemediable {
                                 feedback_for_model, ..
@@ -504,17 +564,11 @@ where
                                     &action_id,
                                     "kernel.completion_rejected",
                                 );
-                                return (
-                                    self.app.build_terminal_result(&state, &usage),
-                                    self.ledger.events().to_vec(),
-                                );
+                                break 'run "kernel.completion_rejected";
                             }
                             CompletionDecision::Paused => {
                                 // V1: Not supported, end session
-                                return (
-                                    self.app.build_terminal_result(&state, &usage),
-                                    self.ledger.events().to_vec(),
-                                );
+                                break 'run "kernel.session_paused";
                             }
                         }
                     }
@@ -528,7 +582,42 @@ where
                     }
                 }
             }
+
+            // End of turn: persist progress so a crash or kill can be resumed.
+            self.save_checkpoint(
+                &session_id,
+                turn,
+                tool_call_count,
+                completion_attempt_count,
+                &usage,
+                &history,
+                &latest_tool_call_ids,
+                &repeat_counts,
+                None,
+            );
+        };
+
+        // A session that stopped before finishing leaves a checkpoint that a
+        // later invocation can resume; a finished one has nothing to resume.
+        if stop == "kernel.completion_accepted" {
+            self.discard_checkpoint();
+        } else {
+            self.save_checkpoint(
+                &session_id,
+                turn,
+                tool_call_count,
+                completion_attempt_count,
+                &usage,
+                &history,
+                &latest_tool_call_ids,
+                &repeat_counts,
+                Some(stop),
+            );
         }
+        (
+            self.app.build_terminal_result(&state, &usage),
+            self.ledger.events().to_vec(),
+        )
     }
 
     fn append_event(
@@ -562,10 +651,86 @@ where
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn save_checkpoint(
+        &self,
+        session_id: &str,
+        turn: u32,
+        tool_call_count: u32,
+        completion_attempt_count: u32,
+        usage: &UsageRecord,
+        history: &[ConversationMessage],
+        latest_tool_call_ids: &HashMap<(String, String), String>,
+        repeat_counts: &HashMap<(String, String), u32>,
+        stopped_by: Option<&str>,
+    ) {
+        let Some(sink) = &self.checkpoint_sink else {
+            return;
+        };
+        let key = |(tool, arguments): &(String, String)| CallKey {
+            tool: tool.clone(),
+            arguments: arguments.clone(),
+        };
+        let mut history = history.to_vec();
+        repair_dangling_tool_calls(&mut history);
+        let checkpoint = Checkpoint {
+            version: CHECKPOINT_VERSION,
+            fingerprint: sink.fingerprint.clone(),
+            session_id: session_id.into(),
+            turn,
+            tool_call_count,
+            completion_attempt_count,
+            usage: usage.clone(),
+            history,
+            latest_tool_calls: latest_tool_call_ids
+                .iter()
+                .map(|(k, id)| LatestCall { key: key(k), action_id: id.clone() })
+                .collect(),
+            repeat_counts: repeat_counts
+                .iter()
+                .map(|(k, count)| RepeatCount { key: key(k), count: *count })
+                .collect(),
+            events: self.ledger.events().to_vec(),
+            stopped_by: stopped_by.map(str::to_owned),
+            progress: Progress {
+                turns: turn,
+                tool_calls: tool_call_count,
+                distinct_tool_calls: latest_tool_call_ids.len() as u32,
+                completion_attempts: completion_attempt_count,
+            },
+        };
+        if let Err(error) = checkpoint.save(&sink.path) {
+            // A failed checkpoint must never fail the review itself.
+            tracing::warn!(%error, "failed to write checkpoint");
+        }
+    }
+
+    fn discard_checkpoint(&self) {
+        if let Some(sink) = &self.checkpoint_sink {
+            let _ = std::fs::remove_file(&sink.path);
+        }
+    }
+
     // Expose the ledger for test assertions
     pub fn ledger(&self) -> &InMemoryLedger {
         &self.ledger
     }
+}
+
+fn budget_exhaustion(limits: &Limits, usage: &UsageRecord) -> Option<Vec<&'static str>> {
+    let mut exhausted = Vec::new();
+    if limits
+        .max_input_tokens
+        .is_some_and(|limit| usage.input_tokens > limit)
+    {
+        exhausted.push("input_tokens exceeded max_input_tokens");
+    }
+    if let (Some(limit), Some(cost)) = (limits.max_cost_usd, usage.estimated_cost_usd) {
+        if cost > limit {
+            exhausted.push("estimated_cost_usd exceeded max_cost_usd");
+        }
+    }
+    (!exhausted.is_empty()).then_some(exhausted)
 }
 
 /// Build a JSON summary of a tall call fo rthe event details field.

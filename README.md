@@ -57,6 +57,27 @@ The review flow is built around bounded, read-only inspection tools such as:
 
 The runtime includes explicit safety constraints, including denied sensitive paths, bounded output sizes, and completeness signals for truncated results.
 
+### Resuming a stopped review
+
+A review that stops early (tool-call, turn, budget or stall limit, Ctrl-C, or a crash) can continue from where it stopped instead of starting over:
+
+```bash
+review-cli run --request req.json --checkpoint review.cp --max-tool-calls 120
+# stopped on the tool-call limit; inspect progress, then continue with more room
+review-cli run --request req.json --checkpoint review.cp --resume --max-tool-calls 180
+```
+
+- `--checkpoint PATH` saves state after every turn and whenever the run stops early. A review that completes removes the file.
+- `--resume` loads that checkpoint. It fails with `RESUME_FAILED` if the file is missing, unreadable, from an unsupported version, or was created for a different request.
+- Limits are **cumulative** against the checkpointed counters (turns, tool calls, completion attempts, tokens, cost), so raising `--max-tool-calls` from 120 to 180 grants 60 more calls. The wall-clock budget restarts on every attempt.
+- The checkpoint holds the ledger, conversation history and counters. Application state is rebuilt by replaying the ledger, so the ledger stays the source of truth; the earlier attempt's terminal events stay in the audit trail but do not affect the resumed run. Resumed runs add a `kernel.session_resumed` event.
+- A tool call that was cut off by the limit is not counted or executed; the model is told it did not run and may issue it again.
+- The checkpoint's `progress` block (`tool_calls`, `distinct_tool_calls`, `turns`) is a quick signal for deciding whether another increase is worthwhile: a high `distinct_tool_calls / tool_calls` ratio means the model was still discovering new evidence rather than repeating itself.
+- A checkpoint is bound to the resolved base/head commit ids (or index tree) and the requirements content, not just the request text, so it is rejected if a branch or `HEAD` moved or the requirements changed since it was written.
+- `--checkpoint` must be a different file from `--ledger`, and for `:working` reviews it must live outside the repository (inside it, it would show up as an untracked change and be inspected).
+- Resuming with a token or cost limit the checkpoint already exceeds stops immediately, before another model request.
+- With `:working` / `:staged` heads, files may change between attempts; the review state tracks content ids, so a re-read of a changed file replaces the earlier evidence.
+
 ### Reading file chunks
 
 The model-facing `read_file` tool accepts a required `path` and two optional line-range arguments:
