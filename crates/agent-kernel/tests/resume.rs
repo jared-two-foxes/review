@@ -309,7 +309,7 @@ fn cancelled_call_is_not_counted() {
     let flag = Arc::new(AtomicBool::new(false));
     let mut catalog = ToolCatalog::new();
     catalog.register(Box::new(CountingTool(executed.clone())));
-    let (_, events) = SessionCoordinator::new(
+    let (result, events) = SessionCoordinator::new(
         App,
         Script {
             cancel_on_generate: Some(flag.clone()),
@@ -323,6 +323,8 @@ fn cancelled_call_is_not_counted() {
     .with_checkpoint(cp.clone(), "fp".into())
     .run_full((), Some(flag.as_ref()));
     assert_eq!(events.last().unwrap().event_type, "kernel.session_cancelled");
+    // The terminal event reaches application state, so the result can say why.
+    assert_eq!(result.terminal.as_deref(), Some("kernel.session_cancelled"));
     assert_eq!(executed.get(), 0);
     let saved = Checkpoint::load(&cp, "fp").unwrap();
     assert_eq!(saved.tool_call_count, 0, "cancelled call must not consume budget");
@@ -338,20 +340,22 @@ fn restored_usage_over_budget_stops_before_another_generation() {
     l.max_input_tokens = Some(50);
     let mut expensive = respond(vec![call("a1", 1)]);
     expensive.usage = Some(UsageRecord { input_tokens: 100, output_tokens: 1, estimated_cost_usd: None });
-    let (_, events) = coordinator(vec![expensive], &executed, &seen, l)
+    let (first, events) = coordinator(vec![expensive], &executed, &seen, l)
         .with_checkpoint(cp.clone(), "fp".into())
         .run_full((), None);
     assert_eq!(events.last().unwrap().event_type, "kernel.session_budget_exhausted");
+    assert_eq!(first.terminal.as_deref(), Some("kernel.session_budget_exhausted"));
     let saved = Checkpoint::load(&cp, "fp").unwrap();
 
     seen.borrow_mut().clear();
     let mut l = limits(10, None);
     l.max_input_tokens = Some(50);
     // No scripted responses: any provider call would panic.
-    let (_, events) = coordinator(vec![], &executed, &seen, l)
+    let (second, events) = coordinator(vec![], &executed, &seen, l)
         .with_checkpoint(cp.clone(), "fp".into())
         .resume_from(saved)
         .run_full((), None);
     assert_eq!(events.last().unwrap().event_type, "kernel.session_budget_exhausted");
+    assert_eq!(second.terminal.as_deref(), Some("kernel.session_budget_exhausted"));
     assert!(seen.borrow().is_empty(), "no model request may be made");
 }

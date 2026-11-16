@@ -169,13 +169,14 @@ where
             if let Some(token) = cancel {
                 if token.load(Ordering::Relaxed) {
                     tracing::warn!(turn, "session cancelled by external request");
-                    self.append_event_with_details(
+                    let event = self.append_event_with_details(
                         &session_id,
                         turn,
                         "",
                         "kernel.session_cancelled",
                         Some("cancelled by external request".into()),
                     );
+                    state = self.app.reduce_event(&state, &event);
                     turn -= 1;
                     break 'run "kernel.session_cancelled";
                 }
@@ -199,13 +200,14 @@ where
             // example resumed with an unchanged or lower limit); stop before
             // paying for another generation.
             if let Some(reason) = budget_exhaustion(&self.limits, &usage) {
-                self.append_event_with_details(
+                let event = self.append_event_with_details(
                     &session_id,
                     turn,
                     "",
                     "kernel.session_budget_exhausted",
                     Some(reason.join("; ")),
                 );
+                state = self.app.reduce_event(&state, &event);
                 turn -= 1;
                 break 'run "kernel.session_budget_exhausted";
             }
@@ -240,11 +242,12 @@ where
                 Ok(r) => r,
                 Err(e) => {
                     if session_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                        self.append_event(&session_id, turn, "", "kernel.session_budget_exhausted");
+                        let event = self.append_event(&session_id, turn, "", "kernel.session_budget_exhausted");
+                        state = self.app.reduce_event(&state, &event);
                         break 'run "kernel.session_budget_exhausted";
                     }
                     tracing::warn!(turn, error = ?e, "model failed");
-                    self.append_event_with_details(
+                    let failed = self.append_event_with_details(
                         &session_id,
                         turn,
                         "",
@@ -256,7 +259,10 @@ where
                             crate::model::ModelError::ApiError(_) => "provider",
                         }}).to_string()),
                     );
-                    self.append_event(&session_id, turn, "", "kernel.session_indeterminate");
+                    // The typed failure reason lives in the model_failed event.
+                    state = self.app.reduce_event(&state, &failed);
+                    let event = self.append_event(&session_id, turn, "", "kernel.session_indeterminate");
+                    state = self.app.reduce_event(&state, &event);
                     break 'run "kernel.session_indeterminate";
                 }
             };
@@ -273,13 +279,14 @@ where
             }
 
             if let Some(exhausted_budgets) = budget_exhaustion(&self.limits, &usage) {
-                self.append_event_with_details(
+                let event = self.append_event_with_details(
                     &session_id,
                     turn,
                     "",
                     "kernel.session_budget_exhausted",
                     Some(exhausted_budgets.join("; ")),
                 );
+                state = self.app.reduce_event(&state, &event);
                 break 'run "kernel.session_budget_exhausted";
             }
 
@@ -354,13 +361,14 @@ where
                         if let Some(token) = cancel {
                             if token.load(std::sync::atomic::Ordering::Relaxed) {
                                 tracing::warn!(turn, "session cancelled during tool dispatch");
-                                self.append_event_with_details(
+                                let event = self.append_event_with_details(
                                     &session_id,
                                     turn,
                                     "",
                                     "kernel.session_cancelled",
                                     Some("cancelled by external request".into()),
                                 );
+                                state = self.app.reduce_event(&state, &event);
                                 // The call was counted above but never ran.
                                 tool_call_count -= 1;
                                 break 'run "kernel.session_cancelled";
