@@ -190,7 +190,11 @@ fn request_fingerprint(request: &ReviewRequest, requirements: &Option<String>) -
         .map_err(|e| format!("resolve head_ref: {e}"))?
         .label(&repo);
     let mut request_json = serde_json::to_value(request).map_err(|e| e.to_string())?;
-    request_json["requirements"] = Value::Null;
+    // Only blank the path when there is one: a request without requirements
+    // serializes without the key, and its fingerprint is unchanged from before.
+    if request_json.get("requirements").is_some() {
+        request_json["requirements"] = Value::Null;
+    }
     let identity = json!({
         "request": request_json,
         "base": base,
@@ -261,19 +265,21 @@ fn validate_artifact_paths(request: &ReviewRequest, config: &ReviewConfig) -> Re
             return Err("--ledger must not be the checkpoint being resumed".into());
         }
     }
-    let Some(checkpoint) = &config.checkpoint_path else {
-        return Ok(());
-    };
-    if let Some(ledger) = &config.ledger_path {
-        if same_file(checkpoint, ledger) {
-            return Err("--checkpoint and --ledger must be different files".into());
+    let checkpoint = config.checkpoint_path.as_deref();
+    let mut tmp = std::path::PathBuf::new();
+    if let Some(checkpoint) = checkpoint {
+        if let Some(ledger) = &config.ledger_path {
+            if same_file(checkpoint, ledger) {
+                return Err("--checkpoint and --ledger must be different files".into());
+            }
         }
-    }
-    let mut tmp = checkpoint.as_os_str().to_owned();
-    tmp.push(".tmp");
-    if let Some(ledger) = &config.ledger_path {
-        if same_file(Path::new(&tmp), ledger) {
-            return Err("--ledger must not be the checkpoint's temporary file".into());
+        let mut name = checkpoint.as_os_str().to_owned();
+        name.push(".tmp");
+        tmp = std::path::PathBuf::from(name);
+        if let Some(ledger) = &config.ledger_path {
+            if same_file(&tmp, ledger) {
+                return Err("--ledger must not be the checkpoint's temporary file".into());
+            }
         }
     }
     if request.head_ref == ":working" {
@@ -282,12 +288,25 @@ fn validate_artifact_paths(request: &ReviewRequest, config: &ReviewConfig) -> Re
             .unwrap_or_else(|_| Path::new(&request.repository_path).to_path_buf());
         let inside = |p: &Path| resolve_artifact_path(p).starts_with(&repo_root);
         let exposed = |p: &Path| inside(p) && !is_git_ignored(&repo_root, p);
-        if exposed(checkpoint) || exposed(Path::new(&tmp)) {
-            return Err(
-                "--checkpoint must be outside the repository or git-ignored when reviewing \
-                 the working tree (it would appear as an untracked change)"
-                    .into(),
-            );
+        if let Some(checkpoint) = checkpoint {
+            if exposed(checkpoint) || exposed(&tmp) {
+                return Err(
+                    "--checkpoint must be outside the repository or git-ignored when reviewing \
+                     the working tree (it would appear as an untracked change)"
+                        .into(),
+                );
+            }
+        }
+        // The file being resumed from is just as visible to the review, whether
+        // or not a new checkpoint is also being written.
+        if let Some(source) = resume_source(config)? {
+            if exposed(source) {
+                return Err(
+                    "--resume-from must be outside the repository or git-ignored when reviewing \
+                     the working tree (it would appear as an untracked change)"
+                        .into(),
+                );
+            }
         }
     }
     Ok(())
@@ -1321,6 +1340,55 @@ mod tests {
         assert!(validate_artifact_paths(&working, &ignored).is_ok());
         let exposed = ReviewConfig { checkpoint_path: Some(repo.join("review.cp")), ..Default::default() };
         assert!(validate_artifact_paths(&working, &exposed).is_err());
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn working_tree_review_rejects_an_exposed_resume_source_even_without_a_checkpoint() {
+        let repo = init_repo("resume-src");
+        std::fs::create_dir_all(repo.join("ignored")).unwrap();
+        let working = request_for(":working", repo.to_str().unwrap());
+        let outside = std::env::temp_dir().join(format!("outside-{}.cp", std::process::id()));
+        // Resume source inside the repository and not ignored, destination outside.
+        let exposed = ReviewConfig {
+            checkpoint_path: Some(outside.clone()),
+            resume_from: Some(repo.join("old.cp")),
+            ..Default::default()
+        };
+        assert!(validate_artifact_paths(&working, &exposed).is_err());
+        // ... and with no destination at all (the early-return case).
+        let no_destination = ReviewConfig { resume_from: Some(repo.join("old.cp")), ..Default::default() };
+        assert!(validate_artifact_paths(&working, &no_destination).is_err());
+        // Ignored or outside is fine.
+        let ignored = ReviewConfig { resume_from: Some(repo.join("ignored/old.cp")), ..Default::default() };
+        assert!(validate_artifact_paths(&working, &ignored).is_ok());
+        let external = ReviewConfig { resume_from: Some(outside), ..Default::default() };
+        assert!(validate_artifact_paths(&working, &external).is_ok());
+        // Committed heads are immutable, so an in-repo source is harmless there.
+        let committed = request_for("HEAD", repo.to_str().unwrap());
+        assert!(validate_artifact_paths(&committed, &no_destination).is_ok());
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn fingerprint_is_unchanged_for_requests_without_requirements() {
+        let repo = init_repo("fp-legacy");
+        let request = request_for("HEAD", repo.to_str().unwrap()); // requirements: None
+        let current = request_fingerprint(&request, &None).unwrap();
+        // The formula before the requirements path was excluded.
+        let handle = open_repo(&repo).unwrap();
+        let label = |r: &str| ReviewTarget::parse(&handle, r).unwrap().label(&handle);
+        let legacy = agent_kernel::checkpoint::fingerprint(
+            json!({
+                "request": request,
+                "base": label("HEAD"),
+                "head": label("HEAD"),
+                "requirements": Option::<String>::None,
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(current, legacy);
         std::fs::remove_dir_all(&repo).ok();
     }
 
