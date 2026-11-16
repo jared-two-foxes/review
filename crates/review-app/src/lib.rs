@@ -87,6 +87,10 @@ pub struct ReviewConfig {
     /// cumulative: raise `max_tool_calls` / `max_turns` above what the earlier
     /// attempt used to grant additional room.  The wall-clock budget restarts.
     pub resume: bool,
+    /// Continue from this checkpoint file instead of `checkpoint_path`, while
+    /// still saving to `checkpoint_path`.  Lets a new run directory pick up a
+    /// previous run's work.  Implies resume.
+    pub resume_from: Option<std::path::PathBuf>,
 }
 
 /// Priority level for context blocks during budgeting.
@@ -147,6 +151,7 @@ impl Default for ReviewConfig {
             max_cost_usd: None,
             checkpoint_path: None,
             resume: false,
+            resume_from: None,
         }
     }
 }
@@ -171,8 +176,11 @@ fn load_requirements(request: &ReviewRequest) -> Result<Option<String>, String> 
 /// Identity of what is being reviewed.  A request string such as `HEAD` or a
 /// branch name can move between attempts, and a requirements file can be
 /// edited, so the fingerprint covers the resolved commit ids (or index tree)
-/// and the requirements content, not just the request text.  `:working` has no
-/// immutable identity; the review state's content-id tracking covers that case.
+/// and the requirements content, not just the request text.  The requirements
+/// *path* is deliberately excluded: callers that retry in a fresh working
+/// directory write the same requirements to a different file each time, and
+/// only the content matters.  `:working` has no immutable identity; the review
+/// state's content-id tracking covers that case.
 fn request_fingerprint(request: &ReviewRequest, requirements: &Option<String>) -> Result<String, String> {
     let repo = open_repo(Path::new(&request.repository_path))?;
     let base = ReviewTarget::parse(&repo, &request.base_ref)
@@ -181,8 +189,10 @@ fn request_fingerprint(request: &ReviewRequest, requirements: &Option<String>) -
     let head = ReviewTarget::parse(&repo, &request.head_ref)
         .map_err(|e| format!("resolve head_ref: {e}"))?
         .label(&repo);
+    let mut request_json = serde_json::to_value(request).map_err(|e| e.to_string())?;
+    request_json["requirements"] = Value::Null;
     let identity = json!({
-        "request": request,
+        "request": request_json,
         "base": base,
         "head": head,
         "requirements": requirements,
@@ -215,11 +225,42 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// The checkpoint must not share a file with the ledger (the ledger is
-/// truncated when a session starts) and, for a working-tree review, must not
-/// live inside the repository where it would show up as an untracked change
-/// and be inspected by the model.
+/// Where a resumed run loads its checkpoint from, if it resumes at all.
+fn resume_source(config: &ReviewConfig) -> Result<Option<&Path>, String> {
+    match (&config.resume_from, &config.checkpoint_path, config.resume) {
+        (Some(path), _, _) => Ok(Some(path)),
+        (None, Some(path), true) => Ok(Some(path)),
+        (None, None, true) => Err("resume requires a checkpoint path".into()),
+        (None, _, false) => Ok(None),
+    }
+}
+
+/// Whether git ignores `path`, which must lie inside the repository's work
+/// tree.  Ignored files are not part of a working-tree review.
+fn is_git_ignored(repo_root: &Path, path: &Path) -> bool {
+    let Ok(repo) = open_repo(repo_root) else {
+        return false;
+    };
+    let Some(workdir) = repo.raw_repo().workdir().and_then(|w| w.canonicalize().ok()) else {
+        return false;
+    };
+    match resolve_artifact_path(path).strip_prefix(&workdir) {
+        Ok(relative) => repo.raw_repo().is_path_ignored(relative).unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
+/// The ledger is truncated when a session starts, so it must not share a file
+/// with the checkpoint being written or the checkpoint being resumed from.  For
+/// a working-tree review the checkpoint must not live inside the repository
+/// where it would show up as an untracked change and be inspected by the
+/// model, unless git ignores it.
 fn validate_artifact_paths(request: &ReviewRequest, config: &ReviewConfig) -> Result<(), String> {
+    if let (Some(source), Some(ledger)) = (resume_source(config)?, &config.ledger_path) {
+        if same_file(source, ledger) {
+            return Err("--ledger must not be the checkpoint being resumed".into());
+        }
+    }
     let Some(checkpoint) = &config.checkpoint_path else {
         return Ok(());
     };
@@ -239,10 +280,12 @@ fn validate_artifact_paths(request: &ReviewRequest, config: &ReviewConfig) -> Re
         let repo_root = Path::new(&request.repository_path)
             .canonicalize()
             .unwrap_or_else(|_| Path::new(&request.repository_path).to_path_buf());
-        if resolve_artifact_path(checkpoint).starts_with(&repo_root) {
+        let inside = |p: &Path| resolve_artifact_path(p).starts_with(&repo_root);
+        let exposed = |p: &Path| inside(p) && !is_git_ignored(&repo_root, p);
+        if exposed(checkpoint) || exposed(Path::new(&tmp)) {
             return Err(
-                "--checkpoint must be outside the repository when reviewing the working tree \
-                 (it would appear as an untracked change)"
+                "--checkpoint must be outside the repository or git-ignored when reviewing \
+                 the working tree (it would appear as an untracked change)"
                     .into(),
             );
         }
@@ -254,13 +297,9 @@ fn validate_artifact_paths(request: &ReviewRequest, config: &ReviewConfig) -> Re
 /// caller can fail fast with a clear message.
 pub fn preflight_resume(request: &ReviewRequest, config: &ReviewConfig) -> Result<(), String> {
     validate_artifact_paths(request, config)?;
-    if !config.resume {
+    let Some(path) = resume_source(config)? else {
         return Ok(());
-    }
-    let path = config
-        .checkpoint_path
-        .as_ref()
-        .ok_or("resume requires a checkpoint path")?;
+    };
     let fingerprint = request_fingerprint(request, &load_requirements(request)?)?;
     agent_kernel::checkpoint::Checkpoint::load(path, &fingerprint)
         .map(|_| ())
@@ -361,6 +400,7 @@ pub fn run_review_with_provider<P: ModelProvider>(
 
     // Validate before the coordinator opens (and truncates) the ledger file.
     validate_artifact_paths(request, config)?;
+    let requirements_for_fingerprint = requirements.clone();
     let fingerprint = if config.checkpoint_path.is_some() {
         Some(request_fingerprint(request, &requirements)?)
     } else {
@@ -386,15 +426,17 @@ pub fn run_review_with_provider<P: ModelProvider>(
         catalog.into_inner(),
         limits,
     );
+    if let Some(source) = resume_source(config)? {
+        let fingerprint = match &fingerprint {
+            Some(f) => f.clone(),
+            None => request_fingerprint(request, &requirements_for_fingerprint)?,
+        };
+        let checkpoint = agent_kernel::checkpoint::Checkpoint::load(source, &fingerprint)
+            .map_err(|e| e.to_string())?;
+        coordinator = coordinator.resume_from(checkpoint);
+    }
     if let (Some(path), Some(fingerprint)) = (&config.checkpoint_path, fingerprint) {
-        if config.resume {
-            let checkpoint = agent_kernel::checkpoint::Checkpoint::load(path, &fingerprint)
-                .map_err(|e| e.to_string())?;
-            coordinator = coordinator.resume_from(checkpoint);
-        }
         coordinator = coordinator.with_checkpoint(path.clone(), fingerprint);
-    } else if config.resume {
-        return Err("resume requires a checkpoint path".into());
     }
     Ok(coordinator.run_full(request.clone(), cancel))
 }
@@ -1235,6 +1277,67 @@ mod tests {
         assert!(validate_artifact_paths(&request, &config).is_err());
         config.ledger_path = Some(dir.join("ledger.jsonl"));
         assert!(validate_artifact_paths(&request, &config).is_ok());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn init_repo(tag: &str) -> std::path::PathBuf {
+        let repo = std::env::temp_dir().join(format!("{tag}-{}", std::process::id()));
+        std::fs::remove_dir_all(&repo).ok();
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git").arg("-C").arg(&repo).args(args)
+                .env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t")
+                .status().unwrap();
+            assert!(status.success());
+        };
+        git(&["init", "-q"]);
+        std::fs::write(repo.join(".gitignore"), "ignored/\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "init"]);
+        repo
+    }
+
+    #[test]
+    fn fingerprint_ignores_the_requirements_path_but_not_its_content() {
+        let repo = init_repo("fp");
+        let mut request = request_for("HEAD", repo.to_str().unwrap());
+        request.requirements = Some("/some/attempt-1/requirements.md".into());
+        let a = request_fingerprint(&request, &Some("criteria".into())).unwrap();
+        request.requirements = Some("/some/attempt-2/requirements.md".into());
+        let b = request_fingerprint(&request, &Some("criteria".into())).unwrap();
+        let c = request_fingerprint(&request, &Some("different criteria".into())).unwrap();
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn working_tree_review_allows_a_git_ignored_checkpoint_inside_the_repository() {
+        let repo = init_repo("ignored");
+        std::fs::create_dir_all(repo.join("ignored")).unwrap();
+        let working = request_for(":working", repo.to_str().unwrap());
+        let ignored = ReviewConfig { checkpoint_path: Some(repo.join("ignored/review.cp")), ..Default::default() };
+        assert!(validate_artifact_paths(&working, &ignored).is_ok());
+        let exposed = ReviewConfig { checkpoint_path: Some(repo.join("review.cp")), ..Default::default() };
+        assert!(validate_artifact_paths(&working, &exposed).is_err());
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn resume_from_must_not_be_the_ledger_file() {
+        let dir = std::env::temp_dir().join(format!("resume-from-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let request = request_for("HEAD", "/nonexistent-repo");
+        let config = ReviewConfig {
+            checkpoint_path: Some(dir.join("new.cp")),
+            resume_from: Some(dir.join("old.cp")),
+            ledger_path: Some(dir.join("old.cp")),
+            ..Default::default()
+        };
+        assert!(validate_artifact_paths(&request, &config).is_err());
+        let fine = ReviewConfig { ledger_path: Some(dir.join("ledger.jsonl")), ..config };
+        assert!(validate_artifact_paths(&request, &fine).is_ok());
         std::fs::remove_dir_all(&dir).ok();
     }
 

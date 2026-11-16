@@ -641,6 +641,7 @@ fn requirements_orientation_is_framed_as_data_for_analysis() {
             max_cost_usd: None,
             checkpoint_path: None,
             resume: false,
+            resume_from: None,
         },
         provider,
         None,
