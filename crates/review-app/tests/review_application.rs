@@ -639,6 +639,8 @@ fn requirements_orientation_is_framed_as_data_for_analysis() {
             max_repeated_actions: 3,
             max_input_tokens: None,
             max_cost_usd: None,
+            checkpoint_path: None,
+            resume: false,
         },
         provider,
         None,

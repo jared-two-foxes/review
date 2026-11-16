@@ -36,6 +36,8 @@ fn main() {
     let mut requirements_path: Option<String> = None;
     let mut uncommitted = false;
     let mut ledger_path: Option<String> = None;
+    let mut checkpoint_path: Option<String> = None;
+    let mut resume = false;
 
     let mut parsed_run_subcommand = false;
     let mut i = 1; // Skip program name
@@ -134,6 +136,13 @@ fn main() {
                 ledger_path = Some(flag_value(&args, i, "--ledger"));
                 i += 1;
             }
+            "--checkpoint" => {
+                checkpoint_path = Some(flag_value(&args, i, "--checkpoint"));
+                i += 1;
+            }
+            "--resume" => {
+                resume = true;
+            }
             _ => {}
         }
         i += 1;
@@ -221,7 +230,15 @@ fn main() {
         max_cost_usd,
         ledger_path: ledger_path.map(|p| std::path::PathBuf::from(p)),
         max_repeated_actions,
+        checkpoint_path: checkpoint_path.map(std::path::PathBuf::from),
+        resume,
     };
+    if resume && config.checkpoint_path.is_none() {
+        emit_error("INVALID_ARGUMENTS", "--resume requires --checkpoint");
+    }
+    if let Err(msg) = review_app::preflight_resume(&request, &config) {
+        emit_error("RESUME_FAILED", &msg);
+    }
     let (result, _events, setup_err) =
         review_app::run_review(&request, &config, Some(&cancellation_token));
 
@@ -396,6 +413,18 @@ fn review_cli_command() -> Command {
                         .long("uncommitted")
                         .action(ArgAction::SetTrue)
                         .help("Use the working tree as the head ref"),
+                )
+                .arg(
+                    Arg::new("checkpoint")
+                        .long("checkpoint")
+                        .value_name("PATH")
+                        .help("Save a resumable checkpoint here after every turn; removed when the review completes"),
+                )
+                .arg(
+                    Arg::new("resume")
+                        .long("resume")
+                        .action(ArgAction::SetTrue)
+                        .help("Continue from --checkpoint instead of starting over; limits are cumulative, so raise --max-tool-calls/--max-turns above what the earlier run used"),
                 )
                 .arg(
                     Arg::new("ledger")

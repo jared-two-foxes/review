@@ -80,6 +80,13 @@ pub struct ReviewConfig {
     pub max_repeated_actions: u32,
     pub max_input_tokens: Option<u64>,
     pub max_cost_usd: Option<f64>,
+    /// Save a resumable checkpoint here after every turn and on early stop.
+    /// A completed review removes it.
+    pub checkpoint_path: Option<std::path::PathBuf>,
+    /// Continue from `checkpoint_path` instead of starting over.  Limits are
+    /// cumulative: raise `max_tool_calls` / `max_turns` above what the earlier
+    /// attempt used to grant additional room.  The wall-clock budget restarts.
+    pub resume: bool,
 }
 
 /// Priority level for context blocks during budgeting.
@@ -138,8 +145,29 @@ impl Default for ReviewConfig {
             max_repeated_actions: 3,
             max_input_tokens: None,
             max_cost_usd: None,
+            checkpoint_path: None,
+            resume: false,
         }
     }
+}
+
+fn request_fingerprint(request: &ReviewRequest) -> String {
+    agent_kernel::checkpoint::fingerprint(&serde_json::to_vec(request).unwrap_or_default())
+}
+
+/// Verify that `config.resume` can be honoured before any work starts, so a
+/// caller can fail fast with a clear message.
+pub fn preflight_resume(request: &ReviewRequest, config: &ReviewConfig) -> Result<(), String> {
+    if !config.resume {
+        return Ok(());
+    }
+    let path = config
+        .checkpoint_path
+        .as_ref()
+        .ok_or("resume requires a checkpoint path")?;
+    agent_kernel::checkpoint::Checkpoint::load(path, &request_fingerprint(request))
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 pub fn run_review(
@@ -258,13 +286,24 @@ pub fn run_review_with_provider<P: ModelProvider>(
         max_input_tokens: config.max_input_tokens,
         max_cost_usd: config.max_cost_usd,
     };
-    let coordinator = SessionCoordinator::new(
+    let mut coordinator = SessionCoordinator::new(
         app,
         provider,
         RandomIdGenerator::new(),
         catalog.into_inner(),
         limits,
     );
+    if let Some(path) = &config.checkpoint_path {
+        let fingerprint = request_fingerprint(request);
+        if config.resume {
+            let checkpoint = agent_kernel::checkpoint::Checkpoint::load(path, &fingerprint)
+                .map_err(|e| e.to_string())?;
+            coordinator = coordinator.resume_from(checkpoint);
+        }
+        coordinator = coordinator.with_checkpoint(path.clone(), fingerprint);
+    } else if config.resume {
+        return Err("resume requires a checkpoint path".into());
+    }
     Ok(coordinator.run_full(request.clone(), cancel))
 }
 
