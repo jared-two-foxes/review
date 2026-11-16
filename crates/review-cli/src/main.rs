@@ -38,6 +38,7 @@ fn main() {
     let mut ledger_path: Option<String> = None;
     let mut checkpoint_path: Option<String> = None;
     let mut resume = false;
+    let mut resume_from: Option<String> = None;
 
     let mut parsed_run_subcommand = false;
     let mut i = 1; // Skip program name
@@ -143,6 +144,10 @@ fn main() {
             "--resume" => {
                 resume = true;
             }
+            "--resume-from" => {
+                resume_from = Some(flag_value(&args, i, "--resume-from"));
+                i += 1;
+            }
             _ => {}
         }
         i += 1;
@@ -232,6 +237,7 @@ fn main() {
         max_repeated_actions,
         checkpoint_path: checkpoint_path.map(std::path::PathBuf::from),
         resume,
+        resume_from: resume_from.map(std::path::PathBuf::from),
     };
     if resume && config.checkpoint_path.is_none() {
         emit_error("INVALID_ARGUMENTS", "--resume requires --checkpoint");
@@ -425,6 +431,12 @@ fn review_cli_command() -> Command {
                         .long("resume")
                         .action(ArgAction::SetTrue)
                         .help("Continue from --checkpoint instead of starting over; limits are cumulative, so raise --max-tool-calls/--max-turns above what the earlier run used"),
+                )
+                .arg(
+                    Arg::new("resume-from")
+                        .long("resume-from")
+                        .value_name("PATH")
+                        .help("Continue from the checkpoint at PATH (e.g. a previous run's) while saving to --checkpoint"),
                 )
                 .arg(
                     Arg::new("ledger")
