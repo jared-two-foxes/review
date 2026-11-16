@@ -39,6 +39,7 @@ fn main() {
     let mut checkpoint_path: Option<String> = None;
     let mut resume = false;
     let mut resume_from: Option<String> = None;
+    let mut resume_identity: Option<String> = None;
 
     let mut parsed_run_subcommand = false;
     let mut i = 1; // Skip program name
@@ -148,6 +149,10 @@ fn main() {
                 resume_from = Some(flag_value(&args, i, "--resume-from"));
                 i += 1;
             }
+            "--resume-identity" => {
+                resume_identity = Some(flag_value(&args, i, "--resume-identity"));
+                i += 1;
+            }
             _ => {}
         }
         i += 1;
@@ -238,6 +243,7 @@ fn main() {
         checkpoint_path: checkpoint_path.map(std::path::PathBuf::from),
         resume,
         resume_from: resume_from.map(std::path::PathBuf::from),
+        resume_identity,
     };
     if resume && config.checkpoint_path.is_none() {
         emit_error("INVALID_ARGUMENTS", "--resume requires --checkpoint");
@@ -437,6 +443,12 @@ fn review_cli_command() -> Command {
                         .long("resume-from")
                         .value_name("PATH")
                         .help("Continue from the checkpoint at PATH (e.g. a previous run's) while saving to --checkpoint"),
+                )
+                .arg(
+                    Arg::new("resume-identity")
+                        .long("resume-identity")
+                        .value_name("ID")
+                        .help("Bind the checkpoint to this identity of the review criteria instead of the requirements content; use when the requirements mix stable criteria with per-attempt material. Supply the same ID when writing and resuming"),
                 )
                 .arg(
                     Arg::new("ledger")
