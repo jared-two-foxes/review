@@ -266,7 +266,7 @@ fn checkpoint_for_a_different_request_is_rejected() {
     coordinator(vec![respond(vec![call("a", 1)]), respond(vec![call("b", 2)])], &executed, &seen, limits(1, None))
         .with_checkpoint(cp.clone(), "fp-one".into())
         .run_full((), None);
-    assert!(matches!(Checkpoint::load(&cp, "fp-two"), Err(CheckpointError::FingerprintMismatch)));
+    assert!(matches!(Checkpoint::load(&cp, "fp-two"), Err(CheckpointError::FingerprintMismatch { .. })));
     assert!(matches!(Checkpoint::load(&dir.path().join("missing"), "x"), Err(CheckpointError::Io(_))));
 }
 
@@ -358,4 +358,56 @@ fn restored_usage_over_budget_stops_before_another_generation() {
     assert_eq!(events.last().unwrap().event_type, "kernel.session_budget_exhausted");
     assert_eq!(second.terminal.as_deref(), Some("kernel.session_budget_exhausted"));
     assert!(seen.borrow().is_empty(), "no model request may be made");
+}
+
+#[test]
+fn a_refused_resume_names_the_inputs_that_differ() {
+    use agent_kernel::checkpoint::RequestFingerprint;
+    use std::collections::BTreeMap;
+    let parts = |identity: &str| -> BTreeMap<String, String> {
+        [("base", "b1"), ("resume_identity", identity)].map(|(k, v)| (k.to_string(), v.to_string())).into()
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let cp = dir.path().join("cp.json");
+    let first = RequestFingerprint::new("fp-one", parts("id-1"));
+    let mut c = Checkpoint {
+        version: agent_kernel::checkpoint::CHECKPOINT_VERSION,
+        fingerprint: first.value.clone(),
+        fingerprint_parts: first.parts.clone(),
+        session_id: "s".into(),
+        turn: 0,
+        tool_call_count: 0,
+        completion_attempt_count: 0,
+        usage: UsageRecord { input_tokens: 0, output_tokens: 0, estimated_cost_usd: None },
+        history: vec![],
+        latest_tool_calls: vec![],
+        repeat_counts: vec![],
+        events: vec![],
+        stopped_by: None,
+        progress: Default::default(),
+    };
+    c.save(&cp).unwrap();
+
+    let err = Checkpoint::load(&cp, RequestFingerprint::new("fp-two", parts("id-2"))).unwrap_err();
+    match &err {
+        CheckpointError::FingerprintMismatch { differing } => {
+            assert_eq!(differing.len(), 1);
+            assert_eq!(differing[0].name, "resume_identity");
+            assert_eq!(differing[0].checkpoint.as_deref(), Some("id-1"));
+            assert_eq!(differing[0].current.as_deref(), Some("id-2"));
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    let msg = err.to_string();
+    assert!(msg.starts_with("checkpoint was created for a different request and cannot be resumed"));
+    assert!(msg.contains("resume_identity") && msg.contains("id-1") && msg.contains("id-2"));
+    assert!(!msg.contains("base"));
+
+    // A checkpoint written without recorded parts keeps the original message exactly.
+    c.fingerprint_parts.clear();
+    c.save(&cp).unwrap();
+    let old = Checkpoint::load(&cp, RequestFingerprint::new("fp-two", parts("id-2"))).unwrap_err();
+    assert_eq!(old.to_string(), "checkpoint was created for a different request and cannot be resumed");
+    // Parts never decide acceptance: same combined value with different parts still loads.
+    assert!(Checkpoint::load(&cp, RequestFingerprint::new("fp-one", parts("zzz"))).is_ok());
 }

@@ -68,7 +68,7 @@ review-cli run --request req.json --checkpoint review.cp --resume --max-tool-cal
 ```
 
 - `--checkpoint PATH` saves state after every turn and whenever the run stops early. A review that completes removes the file.
-- `--resume` loads that checkpoint. It fails with `RESUME_FAILED` if the file is missing, unreadable, from an unsupported version, or was created for a different request.
+- `--resume` loads that checkpoint. It fails with `RESUME_FAILED` if the file is missing, unreadable, from an unsupported version, or was created for a different request. For a different request the message also lists which inputs differ (`request`, `base`, `head`, `requirements` or `resume_identity`) with the checkpoint's value and this run's value; checkpoints written before this was recorded give only the general message.
 - Limits are **cumulative** against the checkpointed counters (turns, tool calls, completion attempts, tokens, cost), so raising `--max-tool-calls` from 120 to 180 grants 60 more calls. The wall-clock budget restarts on every attempt.
 - The checkpoint holds the ledger, conversation history and counters. Application state is rebuilt by replaying the ledger, so the ledger stays the source of truth; the earlier attempt's terminal events stay in the audit trail but do not affect the resumed run. Resumed runs add a `kernel.session_resumed` event.
 - A tool call that was cut off by the limit is not counted or executed; the model is told it did not run and may issue it again.

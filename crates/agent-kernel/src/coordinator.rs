@@ -32,7 +32,7 @@ pub struct SessionCoordinator<A, P, I> {
 
 struct CheckpointSink {
     path: std::path::PathBuf,
-    fingerprint: String,
+    fingerprint: crate::checkpoint::RequestFingerprint,
 }
 
 impl<A, P, I> SessionCoordinator<A, P, I>
@@ -58,7 +58,7 @@ where
     /// session stops early.  `fingerprint` identifies the request so a
     /// checkpoint can never be resumed against a different one.  A completed
     /// session removes its checkpoint.
-    pub fn with_checkpoint(mut self, path: std::path::PathBuf, fingerprint: String) -> Self {
+    pub fn with_checkpoint(mut self, path: std::path::PathBuf, fingerprint: crate::checkpoint::RequestFingerprint) -> Self {
         self.checkpoint_sink = Some(CheckpointSink { path, fingerprint });
         self
     }
@@ -683,7 +683,8 @@ where
         repair_dangling_tool_calls(&mut history);
         let checkpoint = Checkpoint {
             version: CHECKPOINT_VERSION,
-            fingerprint: sink.fingerprint.clone(),
+            fingerprint: sink.fingerprint.value.clone(),
+            fingerprint_parts: sink.fingerprint.parts.clone(),
             session_id: session_id.into(),
             turn,
             tool_call_count,
