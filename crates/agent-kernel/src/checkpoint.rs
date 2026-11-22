@@ -12,6 +12,7 @@
 //! counters, so raising a limit grants exactly the additional headroom.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::ledger::LedgerEvent;
@@ -37,12 +38,50 @@ pub fn fingerprint(bytes: &[u8]) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
+/// What a checkpoint is bound to: one combined `value` that decides whether a
+/// resume is allowed, plus the named `parts` it was derived from.  The parts
+/// never affect acceptance; they only let a refusal name which inputs differ.
+/// The kernel does not interpret them (the application chooses names and
+/// values, and an opaque caller-supplied string is a legitimate part).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RequestFingerprint {
+    pub value: String,
+    pub parts: BTreeMap<String, String>,
+}
+
+impl RequestFingerprint {
+    pub fn new(value: impl Into<String>, parts: BTreeMap<String, String>) -> Self {
+        Self { value: value.into(), parts }
+    }
+}
+
+impl From<&str> for RequestFingerprint {
+    fn from(value: &str) -> Self {
+        Self::new(value, BTreeMap::new())
+    }
+}
+
+impl From<String> for RequestFingerprint {
+    fn from(value: String) -> Self {
+        Self::new(value, BTreeMap::new())
+    }
+}
+
+/// One named input whose value differs between a checkpoint and the run that tried to resume it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartMismatch {
+    pub name: String,
+    pub checkpoint: Option<String>,
+    pub current: Option<String>,
+}
+
 #[derive(Debug)]
 pub enum CheckpointError {
     Io(String),
     Parse(String),
     VersionMismatch { found: u32, expected: u32 },
-    FingerprintMismatch,
+    /// `differing` is empty when the checkpoint predates recorded parts, or every part matches.
+    FingerprintMismatch { differing: Vec<PartMismatch> },
 }
 
 impl std::fmt::Display for CheckpointError {
@@ -54,10 +93,24 @@ impl std::fmt::Display for CheckpointError {
                 f,
                 "checkpoint version {found} is not supported (expected {expected})"
             ),
-            Self::FingerprintMismatch => write!(
-                f,
-                "checkpoint was created for a different request and cannot be resumed"
-            ),
+            Self::FingerprintMismatch { differing } => {
+                write!(
+                    f,
+                    "checkpoint was created for a different request and cannot be resumed"
+                )?;
+                if !differing.is_empty() {
+                    write!(f, " (differs in: ")?;
+                    for (i, d) in differing.iter().enumerate() {
+                        let show = |v: &Option<String>| v.as_deref().unwrap_or("<absent>").to_string();
+                        if i > 0 {
+                            write!(f, "; ")?;
+                        }
+                        write!(f, "{}: checkpoint {}, this run {}", d.name, show(&d.checkpoint), show(&d.current))?;
+                    }
+                    write!(f, ")")?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -98,6 +151,10 @@ pub struct Checkpoint {
     pub version: u32,
     /// Identifies the request this checkpoint belongs to.
     pub fingerprint: String,
+    /// The named inputs `fingerprint` was derived from; empty in checkpoints
+    /// written before they were recorded.  Diagnostic only, never compared on its own.
+    #[serde(default)]
+    pub fingerprint_parts: BTreeMap<String, String>,
     pub session_id: String,
     pub turn: u32,
     pub tool_call_count: u32,
@@ -116,7 +173,8 @@ pub struct Checkpoint {
 }
 
 impl Checkpoint {
-    pub fn load(path: &Path, fingerprint: &str) -> Result<Self, CheckpointError> {
+    pub fn load(path: &Path, fingerprint: impl Into<RequestFingerprint>) -> Result<Self, CheckpointError> {
+        let fingerprint = fingerprint.into();
         let bytes = std::fs::read(path).map_err(|e| CheckpointError::Io(format!("{}: {e}", path.display())))?;
         let checkpoint: Checkpoint =
             serde_json::from_slice(&bytes).map_err(|e| CheckpointError::Parse(e.to_string()))?;
@@ -126,8 +184,10 @@ impl Checkpoint {
                 expected: CHECKPOINT_VERSION,
             });
         }
-        if checkpoint.fingerprint != fingerprint {
-            return Err(CheckpointError::FingerprintMismatch);
+        if checkpoint.fingerprint != fingerprint.value {
+            return Err(CheckpointError::FingerprintMismatch {
+                differing: differing_parts(&checkpoint.fingerprint_parts, &fingerprint.parts),
+            });
         }
         Ok(checkpoint)
     }
@@ -142,6 +202,22 @@ impl Checkpoint {
         std::fs::write(&tmp, json).map_err(|e| CheckpointError::Io(format!("{}: {e}", tmp.display())))?;
         std::fs::rename(&tmp, path).map_err(|e| CheckpointError::Io(format!("{}: {e}", path.display())))
     }
+}
+
+/// Names whose values differ.  Empty when the checkpoint recorded no parts, so
+/// older checkpoints keep the generic message.
+fn differing_parts(saved: &BTreeMap<String, String>, now: &BTreeMap<String, String>) -> Vec<PartMismatch> {
+    if saved.is_empty() {
+        return Vec::new();
+    }
+    saved
+        .keys()
+        .chain(now.keys())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .filter(|k| saved.get(*k) != now.get(*k))
+        .map(|k| PartMismatch { name: k.clone(), checkpoint: saved.get(k).cloned(), current: now.get(k).cloned() })
+        .collect()
 }
 
 /// Give every assistant tool call that has no recorded result a synthetic

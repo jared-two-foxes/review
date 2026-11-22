@@ -193,7 +193,7 @@ fn request_fingerprint(
     request: &ReviewRequest,
     requirements: &Option<String>,
     identity: Option<&str>,
-) -> Result<String, String> {
+) -> Result<agent_kernel::checkpoint::RequestFingerprint, String> {
     let repo = open_repo(Path::new(&request.repository_path))?;
     let base = ReviewTarget::parse(&repo, &request.base_ref)
         .map_err(|e| format!("resolve base_ref: {e}"))?
@@ -207,6 +207,12 @@ fn request_fingerprint(
     if request_json.get("requirements").is_some() {
         request_json["requirements"] = Value::Null;
     }
+    // Named inputs, recorded only so a refused resume can say which one differs.
+    let sha = |text: &str| agent_kernel::checkpoint::fingerprint(text.as_bytes());
+    let mut parts = std::collections::BTreeMap::new();
+    parts.insert("request".to_string(), sha(&request_json.to_string()));
+    parts.insert("base".to_string(), base.clone());
+    parts.insert("head".to_string(), head.clone());
     let mut bound = json!({
         "request": request_json,
         "base": base,
@@ -215,11 +221,20 @@ fn request_fingerprint(
     });
     // A caller-supplied identity stands in for the requirements content.  The
     // key is added only when given, so fingerprints without one are unchanged.
-    if let Some(identity) = identity {
-        bound["requirements"] = Value::Null;
-        bound["requirements_identity"] = json!(identity);
+    match identity {
+        Some(identity) => {
+            bound["requirements"] = Value::Null;
+            bound["requirements_identity"] = json!(identity);
+            parts.insert("resume_identity".to_string(), identity.to_string());
+        }
+        None => {
+            parts.insert("requirements".to_string(), sha(&json!(requirements).to_string()));
+        }
     }
-    Ok(agent_kernel::checkpoint::fingerprint(bound.to_string().as_bytes()))
+    Ok(agent_kernel::checkpoint::RequestFingerprint::new(
+        agent_kernel::checkpoint::fingerprint(bound.to_string().as_bytes()),
+        parts,
+    ))
 }
 
 /// Resolve a path that may not exist yet: canonicalize the parent directory
@@ -342,7 +357,7 @@ pub fn preflight_resume(request: &ReviewRequest, config: &ReviewConfig) -> Resul
         &load_requirements(request)?,
         config.resume_identity.as_deref(),
     )?;
-    agent_kernel::checkpoint::Checkpoint::load(path, &fingerprint)
+    agent_kernel::checkpoint::Checkpoint::load(path, fingerprint)
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
@@ -476,7 +491,7 @@ pub fn run_review_with_provider<P: ModelProvider>(
                 config.resume_identity.as_deref(),
             )?,
         };
-        let checkpoint = agent_kernel::checkpoint::Checkpoint::load(source, &fingerprint)
+        let checkpoint = agent_kernel::checkpoint::Checkpoint::load(source, fingerprint)
             .map_err(|e| e.to_string())?;
         coordinator = coordinator.resume_from(checkpoint);
     }
@@ -1418,6 +1433,23 @@ mod tests {
     }
 
     #[test]
+    fn fingerprint_parts_name_what_changed_without_affecting_the_value() {
+        let repo = init_repo("fp-parts");
+        let request = request_for("HEAD", repo.to_str().unwrap());
+        let a = request_fingerprint(&request, &Some("x".into()), Some("id-1")).unwrap();
+        let b = request_fingerprint(&request, &Some("x".into()), Some("id-2")).unwrap();
+        assert_ne!(a.value, b.value);
+        let changed: Vec<_> = a.parts.iter().filter(|(k, v)| b.parts.get(*k) != Some(*v)).map(|(k, _)| k.as_str()).collect();
+        assert_eq!(changed, ["resume_identity"]);
+        // Without an identity the requirements content is the named input instead.
+        let c = request_fingerprint(&request, &Some("one".into()), None).unwrap();
+        let d = request_fingerprint(&request, &Some("two".into()), None).unwrap();
+        assert!(c.parts.contains_key("requirements") && !c.parts.contains_key("resume_identity"));
+        assert_ne!(c.parts["requirements"], d.parts["requirements"]);
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
     fn fingerprint_is_unchanged_for_requests_without_requirements() {
         let repo = init_repo("fp-legacy");
         let request = request_for("HEAD", repo.to_str().unwrap()); // requirements: None
@@ -1435,7 +1467,7 @@ mod tests {
             .to_string()
             .as_bytes(),
         );
-        assert_eq!(current, legacy);
+        assert_eq!(current.value, legacy);
         std::fs::remove_dir_all(&repo).ok();
     }
 
